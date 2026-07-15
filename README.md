@@ -10,7 +10,7 @@ one-time backfill, syncs are fast and incremental.
 
 ## Status
 
-Phase 3 of 5 complete:
+Phase 4 of 5 complete:
 
 - [x] Monorepo scaffold (npm workspaces, TypeScript everywhere)
 - [x] SQLite schema + migrations (scrobbles, entities, tags, stats, service links)
@@ -34,9 +34,11 @@ Phase 3 of 5 complete:
       shaping (albums/tracks, neglect/recency/weighted-shuffle sorts, limit,
       per-artist diversity cap); recipe builder UI with live preview and
       Spotify/TIDAL deep links
-- [ ] Spotify & TIDAL connectors: OAuth, liked-tracks import, precise
-      playlist push (upgrading the search deep links to exact matches)
-- [ ] Presets, anniversaries, mobile styling
+- [x] Spotify & TIDAL connectors: OAuth 2.0 + PKCE with encrypted token
+      storage, Spotify liked-tracks import, service matching (ISRC → search,
+      cached in `service_links`), and playlist push with matched/unmatched
+      reporting. Connections + push UI wired in.
+- [ ] Presets, anniversaries, mobile styling, match fix-up UI
 
 ## Running
 
@@ -70,7 +72,29 @@ data is mapped into `artists`/`artist_tags`, use **Reprocess from cache** to
 rebuild the normalized tables instantly, with no network calls at all.
 
 Data lives in `./data/library.db` (override with `BFTP_DB_PATH`). Port/host:
-`BFTP_PORT`, `BFTP_HOST`.
+`BFTP_PORT`, `BFTP_HOST`. OAuth redirect URIs are derived from `BFTP_PUBLIC_URL`
+(defaults to `http://<host>:<port>`).
+
+### Connecting Spotify / TIDAL
+
+On the Dashboard, under **Streaming services**, paste a client ID from a
+developer app you create on each service, then click **Connect** (OAuth 2.0 +
+PKCE — no client secret needed). Register this redirect URI on the developer
+app: `http://127.0.0.1:8765/api/auth/<service>/callback`. Tokens are stored
+encrypted (AES-256-GCM) under `data/secret.key`.
+
+Notes:
+- **Spotify** development mode needs your own Premium account and allows a
+  handful of users — fine for personal use.
+- **TIDAL** can't expose your liked *tracks* via its API yet, so liked-track
+  filters are fed from Spotify likes + Last.fm loved tracks. TIDAL's write API
+  is new; the endpoint shapes in `apps/server/src/connectors/tidal.ts` and
+  `auth/serviceConfig.ts` are centralized in case they need adjustment against
+  the live API.
+
+Then in the **Recipe builder**, a tracks-mode recipe can be pushed straight to
+a new playlist on either connected service; unmatched and low-confidence
+tracks are reported back.
 
 ## Layout
 

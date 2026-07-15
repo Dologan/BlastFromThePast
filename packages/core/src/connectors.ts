@@ -33,4 +33,5 @@ export interface ServiceConnector {
   getLikedTracks?(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }>;
   deepLinkTrack(serviceId: string): string;
   deepLinkAlbum(serviceAlbumId: string): string;
+  deepLinkPlaylist(servicePlaylistId: string): string;
 }

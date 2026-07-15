@@ -216,6 +216,15 @@ export const settings = sqliteTable('settings', {
   value: text('value').notNull(),
 });
 
+export const serviceAuth = sqliteTable('service_auth', {
+  service: text('service').primaryKey(),
+  accessToken: text('access_token').notNull(),
+  refreshToken: text('refresh_token'),
+  expiresAt: integer('expires_at').notNull(),
+  scope: text('scope'),
+  updatedAt: integer('updated_at').notNull(),
+});
+
 export const recipes = sqliteTable('recipes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),

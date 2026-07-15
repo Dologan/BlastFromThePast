@@ -3,6 +3,9 @@ import type { DbHandle } from '@bftp/db';
 export const SETTING_KEYS = {
   lastfmUsername: 'lastfm.username',
   lastfmApiKey: 'lastfm.apiKey',
+  spotifyClientId: 'spotify.clientId',
+  tidalClientId: 'tidal.clientId',
+  tidalCountryCode: 'tidal.countryCode',
 } as const;
 
 export function getSetting(handle: DbHandle, key: string): string | undefined {

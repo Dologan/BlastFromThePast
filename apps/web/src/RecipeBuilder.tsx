@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, type Facets, type PreviewResult, type SavedRecipe } from './api';
+import {
+  api,
+  type AuthStatus,
+  type Facets,
+  type PreviewResult,
+  type PushResult,
+  type SavedRecipe,
+  type ServiceName,
+} from './api';
 import {
   SORT_LABELS,
   type Clause,
@@ -264,6 +272,10 @@ export default function RecipeBuilder() {
   const [saved, setSaved] = useState<SavedRecipe[]>([]);
   const [name, setName] = useState('');
   const [currentId, setCurrentId] = useState<number | null>(null);
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [pushResult, setPushResult] = useState<PushResult | null>(null);
+  const [pushing, setPushing] = useState<ServiceName | null>(null);
+  const [pushMsg, setPushMsg] = useState<string | null>(null);
 
   const recipe: Recipe = useMemo(
     () => ({ filters: Object.values(enabled).filter(isMeaningful), output }),
@@ -273,7 +285,35 @@ export default function RecipeBuilder() {
   useEffect(() => {
     api.getFacets().then(setFacets).catch(() => {});
     api.listRecipes().then(setSaved).catch(() => {});
+    api.getAuthStatus().then(setAuth).catch(() => {});
   }, []);
+
+  const pushTo = async (service: ServiceName) => {
+    if (output.mode !== 'tracks') {
+      setPushMsg('Switch output to Tracks to push a playlist.');
+      return;
+    }
+    const playlistName = name.trim() || 'Blast From The Past';
+    setPushing(service);
+    setPushResult(null);
+    setPushMsg(`Pushing to ${service}…`);
+    try {
+      await api.push(recipe, service, playlistName);
+      // Poll until the background push job finishes, then read its result.
+      for (let i = 0; i < 200; i++) {
+        const st = await api.getSyncStatus();
+        if (!st.running) break;
+        await new Promise((r) => setTimeout(r, 750));
+      }
+      const { result } = await api.getPushResult();
+      setPushResult(result);
+      setPushMsg(result ? null : 'Push finished but returned no result.');
+    } catch (err) {
+      setPushMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPushing(null);
+    }
+  };
 
   // Debounced live preview.
   useEffect(() => {
@@ -427,6 +467,35 @@ export default function RecipeBuilder() {
           </div>
         </div>
         {error && <p className="error">{error}</p>}
+        {output.mode === 'tracks' && auth && (auth.spotify.connected || auth.tidal.connected) && (
+          <div className="push-row">
+            <span className="hint">Push these tracks as a playlist:</span>
+            {auth.spotify.connected && (
+              <button className="secondary" disabled={pushing !== null} onClick={() => pushTo('spotify')}>
+                {pushing === 'spotify' ? 'Pushing…' : 'Spotify'}
+              </button>
+            )}
+            {auth.tidal.connected && (
+              <button className="secondary" disabled={pushing !== null} onClick={() => pushTo('tidal')}>
+                {pushing === 'tidal' ? 'Pushing…' : 'TIDAL'}
+              </button>
+            )}
+          </div>
+        )}
+        {output.mode === 'tracks' && auth && !auth.spotify.connected && !auth.tidal.connected && (
+          <p className="hint">Connect Spotify or TIDAL on the Dashboard to push playlists.</p>
+        )}
+        {pushMsg && <p className="hint">{pushMsg}</p>}
+        {pushResult && (
+          <p className="hint">
+            Created playlist with {pushResult.matchedCount} track{pushResult.matchedCount === 1 ? '' : 's'} —{' '}
+            <a href={pushResult.playlistUrl} target="_blank" rel="noreferrer">
+              open in {pushResult.service}
+            </a>
+            {pushResult.unmatched.length > 0 && `. ${pushResult.unmatched.length} couldn't be matched.`}
+            {pushResult.lowConfidence.length > 0 && ` ${pushResult.lowConfidence.length} low-confidence match(es).`}
+          </p>
+        )}
         <ResultsList result={result} />
       </section>
 

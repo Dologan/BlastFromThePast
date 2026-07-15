@@ -8,19 +8,36 @@ import { JobManager } from './sync/jobManager.js';
 import { MusicBrainzClient } from './enrich/musicbrainz.js';
 import { Enrichment } from './enrich/enrichment.js';
 import { RecipeService } from './recipes/recipeService.js';
+import { TokenCrypto } from './auth/crypto.js';
+import { TokenStore } from './auth/tokenStore.js';
+import { AuthManager, AuthError } from './auth/authManager.js';
+import { SpotifyConnector } from './connectors/spotify.js';
+import { TidalConnector } from './connectors/tidal.js';
+import { pushPlaylist, type PushResult } from './match/push.js';
+import { importSpotifyLiked } from './sync/spotifyLiked.js';
 import { getSetting, setSetting, SETTING_KEYS } from './settings.js';
-import type { Recipe } from '@bftp/core';
+import type { Recipe, ServiceConnector, ServiceName } from '@bftp/core';
+import path from 'node:path';
 
 const MB_USER_AGENT =
   'BlastFromThePast/0.1 ( https://github.com/dologan/blastfromthepast )';
+const SERVICES: ServiceName[] = ['spotify', 'tidal'];
 
 export interface AppOptions {
   handle: DbHandle;
   /** Directory with the built SPA (apps/web/dist); optional in dev/tests. */
   webDistDir?: string;
+  /** Directory for the token-encryption key file; ephemeral key if omitted (tests). */
+  dataDir?: string;
+  /** Public base URL for OAuth redirect URIs. */
+  publicUrl?: string;
   /** Injectable for tests. */
   createLastfmClient?: (apiKey: string) => LastfmClient;
   createMusicBrainzClient?: () => MusicBrainzClient;
+  /** Overrides the real Spotify/TIDAL connectors (tests). */
+  createConnector?: (service: ServiceName) => ServiceConnector;
+  /** OAuth manager override (tests). */
+  authManager?: AuthManager;
 }
 
 export function buildApp(opts: AppOptions): FastifyInstance {
@@ -31,25 +48,60 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     opts.createMusicBrainzClient ?? (() => new MusicBrainzClient(MB_USER_AGENT));
   const recipes = new RecipeService(handle);
 
+  const publicUrl = opts.publicUrl ?? process.env.BFTP_PUBLIC_URL ?? 'http://127.0.0.1:8765';
+  const crypto = opts.dataDir
+    ? TokenCrypto.loadOrCreate(path.join(opts.dataDir, 'secret.key'))
+    : TokenCrypto.ephemeral();
+  const tokenStore = new TokenStore(handle, crypto);
+  const auth = opts.authManager ?? new AuthManager(handle, tokenStore, publicUrl);
+
+  const makeConnector = (service: ServiceName): ServiceConnector => {
+    if (opts.createConnector) return opts.createConnector(service);
+    const getToken = () => auth.getAccessToken(service);
+    const isAuthorized = () => auth.isAuthorized(service);
+    if (service === 'spotify') return new SpotifyConnector(getToken, isAuthorized);
+    const cc = getSetting(handle, SETTING_KEYS.tidalCountryCode) ?? 'US';
+    return new TidalConnector(getToken, isAuthorized, cc);
+  };
+
+  let lastPush: PushResult | null = null;
+
   const app = Fastify({ logger: true });
 
   app.get('/api/health', async () => ({ ok: true }));
 
   app.get('/api/settings', async () => {
-    const apiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
     return {
       lastfmUsername: getSetting(handle, SETTING_KEYS.lastfmUsername) ?? null,
-      lastfmApiKeySet: Boolean(apiKey),
+      lastfmApiKeySet: Boolean(getSetting(handle, SETTING_KEYS.lastfmApiKey)),
+      spotifyClientId: getSetting(handle, SETTING_KEYS.spotifyClientId) ?? null,
+      tidalClientId: getSetting(handle, SETTING_KEYS.tidalClientId) ?? null,
+      tidalCountryCode: getSetting(handle, SETTING_KEYS.tidalCountryCode) ?? 'US',
     };
   });
 
   app.put('/api/settings', async (req, reply) => {
-    const body = req.body as { lastfmUsername?: string; lastfmApiKey?: string };
+    const body = req.body as {
+      lastfmUsername?: string;
+      lastfmApiKey?: string;
+      spotifyClientId?: string;
+      tidalClientId?: string;
+      tidalCountryCode?: string;
+    };
     if (body.lastfmUsername !== undefined) {
       setSetting(handle, SETTING_KEYS.lastfmUsername, body.lastfmUsername.trim());
     }
     if (body.lastfmApiKey !== undefined && body.lastfmApiKey !== '') {
       setSetting(handle, SETTING_KEYS.lastfmApiKey, body.lastfmApiKey.trim());
+    }
+    if (body.spotifyClientId !== undefined) {
+      setSetting(handle, SETTING_KEYS.spotifyClientId, body.spotifyClientId.trim());
+    }
+    if (body.tidalClientId !== undefined) {
+      setSetting(handle, SETTING_KEYS.tidalClientId, body.tidalClientId.trim());
+    }
+    if (body.tidalCountryCode !== undefined) {
+      setSetting(handle, SETTING_KEYS.tidalCountryCode, body.tidalCountryCode.trim().toUpperCase());
     }
     reply.code(204);
   });
@@ -158,6 +210,90 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
     return { ...counts, topArtists, enrichment, cache, topGenres, topCountries };
   });
+
+  // ---- Streaming service connections (OAuth) ----
+
+  function parseService(raw: string): ServiceName | null {
+    return (SERVICES as string[]).includes(raw) ? (raw as ServiceName) : null;
+  }
+
+  app.get('/api/auth/status', async () => ({
+    spotify: { connected: auth.isAuthorized('spotify'), clientIdSet: Boolean(getSetting(handle, SETTING_KEYS.spotifyClientId)) },
+    tidal: { connected: auth.isAuthorized('tidal'), clientIdSet: Boolean(getSetting(handle, SETTING_KEYS.tidalClientId)) },
+  }));
+
+  app.get('/api/auth/:service/start', async (req, reply) => {
+    const service = parseService((req.params as { service: string }).service);
+    if (!service) return reply.code(404).send({ error: 'Unknown service.' });
+    try {
+      return { url: auth.start(service) };
+    } catch (err) {
+      const msg = err instanceof AuthError ? err.message : String(err);
+      return reply.code(400).send({ error: msg });
+    }
+  });
+
+  app.get('/api/auth/:service/callback', async (req, reply) => {
+    const service = parseService((req.params as { service: string }).service);
+    const q = req.query as { code?: string; state?: string; error?: string };
+    if (!service) return reply.code(404).send({ error: 'Unknown service.' });
+    if (q.error || !q.code || !q.state) {
+      return reply.redirect(`/?connect=${service}&error=${encodeURIComponent(q.error ?? 'missing_code')}`);
+    }
+    try {
+      await auth.handleCallback(service, q.code, q.state);
+      return reply.redirect(`/?connect=${service}&ok=1`);
+    } catch (err) {
+      const msg = err instanceof AuthError ? err.message : String(err);
+      return reply.redirect(`/?connect=${service}&error=${encodeURIComponent(msg)}`);
+    }
+  });
+
+  app.post('/api/auth/:service/disconnect', async (req, reply) => {
+    const service = parseService((req.params as { service: string }).service);
+    if (!service) return reply.code(404).send({ error: 'Unknown service.' });
+    auth.disconnect(service);
+    reply.code(204);
+  });
+
+  app.post('/api/sync/spotify-liked', async (req, reply) => {
+    if (!auth.isAuthorized('spotify')) return reply.code(400).send({ error: 'Connect Spotify first.' });
+    const connector = makeConnector('spotify');
+    const started = jobs.start('spotify-liked', async () => {
+      await importSpotifyLiked(handle, connector, jobs.reportProgress);
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true });
+  });
+
+  // ---- Playlist push ----
+
+  app.post('/api/push', async (req, reply) => {
+    const body = req.body as { recipe?: Recipe; service?: string; name?: string; description?: string };
+    const service = body.service ? parseService(body.service) : null;
+    if (!service) return reply.code(400).send({ error: 'A valid service is required.' });
+    if (!body.name?.trim()) return reply.code(400).send({ error: 'A playlist name is required.' });
+    if (!body.recipe) return reply.code(400).send({ error: 'A recipe is required.' });
+    if (body.recipe.output.mode !== 'tracks') {
+      return reply.code(400).send({ error: 'Playlist push requires a tracks-mode recipe.' });
+    }
+    if (!auth.isAuthorized(service)) return reply.code(400).send({ error: `Connect ${service} first.` });
+
+    const preview = recipes.preview(body.recipe);
+    const tracks = preview.rows.map((r) => ({ trackId: r.entityId, name: r.name, artistName: r.artistName }));
+    const connector = makeConnector(service);
+    const name = body.name.trim();
+    const description = body.description ?? 'Created by Blast From The Past';
+
+    lastPush = null;
+    const started = jobs.start('push', async () => {
+      lastPush = await pushPlaylist(handle, connector, service, name, description, tracks, jobs.reportProgress);
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true, trackCount: tracks.length });
+  });
+
+  app.get('/api/push/result', async () => ({ result: lastPush }));
 
   app.get('/api/facets', async () => recipes.facets());
 

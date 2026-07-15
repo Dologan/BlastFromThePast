@@ -3,6 +3,31 @@ import type { Recipe } from './recipeTypes';
 export interface Settings {
   lastfmUsername: string | null;
   lastfmApiKeySet: boolean;
+  spotifyClientId: string | null;
+  tidalClientId: string | null;
+  tidalCountryCode: string;
+}
+
+export type ServiceName = 'spotify' | 'tidal';
+
+export interface AuthStatus {
+  spotify: { connected: boolean; clientIdSet: boolean };
+  tidal: { connected: boolean; clientIdSet: boolean };
+}
+
+export interface UnmatchedTrack {
+  trackId: number;
+  name: string;
+  artistName: string;
+}
+
+export interface PushResult {
+  playlistId: string;
+  playlistUrl: string;
+  service: ServiceName;
+  matchedCount: number;
+  unmatched: UnmatchedTrack[];
+  lowConfidence: UnmatchedTrack[];
 }
 
 export interface PreviewRow {
@@ -54,10 +79,25 @@ export type EnrichProgress =
     }
   | { kind: 'enrich'; phase: 'derive'; processed: number; total: number };
 
+export interface SpotifyLikedProgress {
+  kind: 'spotify-liked';
+  seen: number;
+  linked: number;
+}
+
+export interface PushProgress {
+  kind: 'push';
+  matched: number;
+  processed: number;
+  total: number;
+}
+
+export type JobProgress = SyncProgress | EnrichProgress | SpotifyLikedProgress | PushProgress;
+
 export interface SyncStatus {
   running: boolean;
   job: string | null;
-  progress: SyncProgress | EnrichProgress | null;
+  progress: JobProgress | null;
   error: string | null;
   finishedAt: number | null;
   sources: { source: string; status: string; error: string | null; lastSyncedAt: number | null }[];
@@ -95,7 +135,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getSettings: () => request<Settings>('/api/settings'),
-  saveSettings: (body: { lastfmUsername?: string; lastfmApiKey?: string }) =>
+  saveSettings: (body: {
+    lastfmUsername?: string;
+    lastfmApiKey?: string;
+    spotifyClientId?: string;
+    tidalClientId?: string;
+    tidalCountryCode?: string;
+  }) =>
     request<void>('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -133,4 +179,18 @@ export const api = {
       body: JSON.stringify({ name, definition }),
     }),
   deleteRecipe: (id: number) => request<void>(`/api/recipes/${id}`, { method: 'DELETE' }),
+
+  getAuthStatus: () => request<AuthStatus>('/api/auth/status'),
+  startAuth: (service: ServiceName) => request<{ url: string }>(`/api/auth/${service}/start`),
+  disconnect: (service: ServiceName) =>
+    request<void>(`/api/auth/${service}/disconnect`, { method: 'POST' }),
+  importSpotifyLiked: () => request<{ started: boolean }>('/api/sync/spotify-liked', { method: 'POST' }),
+
+  push: (recipe: Recipe, service: ServiceName, name: string) =>
+    request<{ started: boolean; trackCount: number }>('/api/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipe, service, name }),
+    }),
+  getPushResult: () => request<{ result: PushResult | null }>('/api/push/result'),
 };

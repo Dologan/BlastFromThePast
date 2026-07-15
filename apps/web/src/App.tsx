@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type LibrarySummary, type Settings, type SyncStatus } from './api';
+import { api, type AuthStatus, type LibrarySummary, type ServiceName, type Settings, type SyncStatus } from './api';
 import RecipeBuilder from './RecipeBuilder';
 
 function formatDate(uts: number | null): string {
@@ -61,6 +61,12 @@ function progressText(status: SyncStatus): string | null {
     }
     return `Applying to library — ${p.processed} of ${p.total} artists`;
   }
+  if ('kind' in p && p.kind === 'spotify-liked') {
+    return `Importing Spotify liked — ${p.linked} matched of ${p.seen} seen`;
+  }
+  if ('kind' in p && p.kind === 'push') {
+    return `Building playlist — matched ${p.matched} of ${p.processed}/${p.total}`;
+  }
   if ('phase' in p) {
     if (p.phase === 'scrobbles' && p.totalPages)
       return `Scrobbles: page ${p.page} of ${p.totalPages} — ${p.inserted} new`;
@@ -70,20 +76,113 @@ function progressText(status: SyncStatus): string | null {
   return null;
 }
 
+function ConnectionsPanel({
+  settings,
+  onSaved,
+}: {
+  settings: Settings;
+  onSaved: () => void;
+}) {
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [spotifyId, setSpotifyId] = useState(settings.spotifyClientId ?? '');
+  const [tidalId, setTidalId] = useState(settings.tidalClientId ?? '');
+  const [country, setCountry] = useState(settings.tidalCountryCode ?? 'US');
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const refresh = useCallback(() => api.getAuthStatus().then(setAuth).catch(() => {}), []);
+  useEffect(() => {
+    void refresh();
+    // Surface the OAuth callback outcome (redirected here as ?connect=…).
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('connect')) {
+      setMsg(p.get('ok') ? `Connected ${p.get('connect')}.` : `Connection failed: ${p.get('error')}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [refresh]);
+
+  const saveIds = async () => {
+    await api.saveSettings({ spotifyClientId: spotifyId, tidalClientId: tidalId, tidalCountryCode: country });
+    onSaved();
+    setMsg('Saved.');
+  };
+
+  const connect = async (service: ServiceName) => {
+    try {
+      const { url } = await api.startAuth(service);
+      window.location.href = url; // hand off to the provider's consent page
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const disconnect = async (service: ServiceName) => {
+    await api.disconnect(service);
+    await refresh();
+  };
+
+  const row = (service: ServiceName, connected: boolean, clientIdSet: boolean) => (
+    <div className="conn-row">
+      <span className="conn-name">{service === 'spotify' ? 'Spotify' : 'TIDAL'}</span>
+      <span className={connected ? 'badge on' : 'badge'}>{connected ? 'connected' : 'not connected'}</span>
+      {connected ? (
+        <button className="secondary" onClick={() => disconnect(service)}>
+          Disconnect
+        </button>
+      ) : (
+        <button onClick={() => connect(service)} disabled={!clientIdSet} title={clientIdSet ? '' : 'Enter a client ID first'}>
+          Connect
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <section className="panel">
+      <h2>Streaming services</h2>
+      <p className="hint">
+        Create a developer app on each service and paste its client ID. Redirect URI to register:{' '}
+        <code>{window.location.origin}/api/auth/&lt;service&gt;/callback</code>
+      </p>
+      <label>
+        Spotify client ID
+        <input value={spotifyId} onChange={(e) => setSpotifyId(e.target.value)} placeholder="from developer.spotify.com" />
+      </label>
+      <label>
+        TIDAL client ID
+        <input value={tidalId} onChange={(e) => setTidalId(e.target.value)} placeholder="from developer.tidal.com" />
+      </label>
+      <label>
+        TIDAL country code
+        <input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="US" style={{ maxWidth: '6rem' }} />
+      </label>
+      <button onClick={saveIds}>Save client IDs</button>
+      {msg && <p className="hint">{msg}</p>}
+      <div className="conns">
+        {auth && row('spotify', auth.spotify.connected, auth.spotify.clientIdSet)}
+        {auth && row('tidal', auth.tidal.connected, auth.tidal.clientIdSet)}
+      </div>
+    </section>
+  );
+}
+
 function SyncPanel({
   status,
   onSync,
   onEnrich,
   onReprocess,
+  onImportLiked,
   pendingEnrich,
   hasCache,
+  spotifyConnected,
 }: {
   status: SyncStatus | null;
   onSync: () => void;
   onEnrich: () => void;
   onReprocess: () => void;
+  onImportLiked: () => void;
   pendingEnrich: number;
   hasCache: boolean;
+  spotifyConnected: boolean;
 }) {
   const running = status?.running ?? false;
   const text = status ? progressText(status) : null;
@@ -102,6 +201,11 @@ function SyncPanel({
         {hasCache && (
           <button onClick={onReprocess} disabled={running} title="Re-apply cached MusicBrainz/Last.fm data to the library without any network calls">
             {running && status?.job === 'enrich-reprocess' ? 'Reprocessing…' : 'Reprocess from cache'}
+          </button>
+        )}
+        {spotifyConnected && (
+          <button onClick={onImportLiked} disabled={running} title="Flag library tracks you've liked on Spotify">
+            {running && status?.job === 'spotify-liked' ? 'Importing…' : 'Import Spotify liked'}
           </button>
         )}
       </div>
@@ -215,13 +319,19 @@ function Dashboard() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [summary, setSummary] = useState<LibrarySummary | null>(null);
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [st, sum] = await Promise.all([api.getSyncStatus(), api.getLibrarySummary()]);
+      const [st, sum, au] = await Promise.all([
+        api.getSyncStatus(),
+        api.getLibrarySummary(),
+        api.getAuthStatus(),
+      ]);
       setStatus(st);
       setSummary(sum);
+      setAuth(au);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -260,9 +370,14 @@ function Dashboard() {
         onSync={() => runJob(api.startLastfmSync)}
         onEnrich={() => runJob(api.startEnrichment)}
         onReprocess={() => runJob(api.startReprocess)}
+        onImportLiked={() => runJob(api.importSpotifyLiked)}
         pendingEnrich={summary?.enrichment.pending ?? 0}
         hasCache={(summary?.cache.mbArtists ?? 0) + (summary?.cache.mbSearches ?? 0) > 0}
+        spotifyConnected={auth?.spotify.connected ?? false}
       />
+      {settings && (
+        <ConnectionsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
+      )}
       <LibraryPanel summary={summary} />
       {summary && <TastePanel summary={summary} />}
     </>
