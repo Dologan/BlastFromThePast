@@ -55,8 +55,10 @@ function progressText(status: SyncStatus): string | null {
   const p = status.progress;
   if (!status.running || !p) return null;
   if ('kind' in p && p.kind === 'enrich') {
-    const who = p.current ? ` — ${p.current}` : '';
-    return `Enriching artists: ${p.processed} of ${p.total}${who}`;
+    if (p.phase === 'fetch') {
+      return `Fetching metadata — MusicBrainz ${p.mbProcessed}/${p.mbTotal}, Last.fm ${p.lastfmProcessed}/${p.lastfmTotal}`;
+    }
+    return `Applying to library — ${p.processed} of ${p.total} artists`;
   }
   if ('phase' in p) {
     if (p.phase === 'scrobbles' && p.totalPages)
@@ -71,12 +73,16 @@ function SyncPanel({
   status,
   onSync,
   onEnrich,
+  onReprocess,
   pendingEnrich,
+  hasCache,
 }: {
   status: SyncStatus | null;
   onSync: () => void;
   onEnrich: () => void;
+  onReprocess: () => void;
   pendingEnrich: number;
+  hasCache: boolean;
 }) {
   const running = status?.running ?? false;
   const text = status ? progressText(status) : null;
@@ -92,6 +98,11 @@ function SyncPanel({
             ? 'Enriching…'
             : `Enrich artists${pendingEnrich > 0 ? ` (${pendingEnrich})` : ''}`}
         </button>
+        {hasCache && (
+          <button onClick={onReprocess} disabled={running} title="Re-apply cached MusicBrainz/Last.fm data to the library without any network calls">
+            {running && status?.job === 'enrich-reprocess' ? 'Reprocessing…' : 'Reprocess from cache'}
+          </button>
+        )}
       </div>
       {text && <p>{text}</p>}
       {status?.error && <p className="error">Last job failed: {status.error}</p>}
@@ -135,6 +146,11 @@ function TastePanel({ summary }: { summary: LibrarySummary }) {
         {e.enriched.toLocaleString()} of {summary.artists.toLocaleString()} artists enriched
         {e.pending > 0 ? `, ${e.pending.toLocaleString()} pending` : ''}
         {e.errored > 0 ? `, ${e.errored.toLocaleString()} errored` : ''} · {e.withCountry.toLocaleString()} with a country
+      </p>
+      <p className="hint">
+        Cache: {summary.cache.mbArtists.toLocaleString()} MusicBrainz artists,{' '}
+        {summary.cache.mbSearches.toLocaleString()} searches, {summary.cache.lastfmTags.toLocaleString()} Last.fm
+        lookups saved — reused for free by “Reprocess from cache”.
       </p>
       {!hasData && <p className="hint">Run “Enrich artists” to populate genres and countries.</p>}
       {summary.topGenres.length > 0 && (
@@ -244,7 +260,9 @@ export default function App() {
         status={status}
         onSync={() => runJob(api.startLastfmSync)}
         onEnrich={() => runJob(api.startEnrichment)}
+        onReprocess={() => runJob(api.startReprocess)}
         pendingEnrich={summary?.enrichment.pending ?? 0}
+        hasCache={(summary?.cache.mbArtists ?? 0) + (summary?.cache.mbSearches ?? 0) > 0}
       />
       <LibraryPanel summary={summary} />
       {summary && <TastePanel summary={summary} />}

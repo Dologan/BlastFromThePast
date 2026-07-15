@@ -10,12 +10,16 @@ export interface SyncProgress {
   inserted: number;
 }
 
-export interface EnrichProgress {
-  kind: 'enrich';
-  processed: number;
-  total: number;
-  current: string | null;
-}
+export type EnrichProgress =
+  | {
+      kind: 'enrich';
+      phase: 'fetch';
+      mbProcessed: number;
+      mbTotal: number;
+      lastfmProcessed: number;
+      lastfmTotal: number;
+    }
+  | { kind: 'enrich'; phase: 'derive'; processed: number; total: number };
 
 export interface SyncStatus {
   running: boolean;
@@ -41,6 +45,7 @@ export interface LibrarySummary {
   lastScrobble: number | null;
   topArtists: { name: string; playcount: number }[];
   enrichment: { enriched: number; pending: number; errored: number; withCountry: number };
+  cache: { mbSearches: number; mbArtists: number; lastfmTags: number };
   topGenres: NamedWeight[];
   topCountries: NamedWeight[];
 }
@@ -65,6 +70,12 @@ export const api = {
     }),
   startLastfmSync: () => request<{ started: boolean }>('/api/sync/lastfm', { method: 'POST' }),
   startEnrichment: () => request<{ started: boolean }>('/api/enrich', { method: 'POST' }),
+  startReprocess: () =>
+    request<{ started: boolean }>('/api/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reprocess: true }),
+    }),
   getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
   getLibrarySummary: () => request<LibrarySummary>('/api/library/summary'),
 };

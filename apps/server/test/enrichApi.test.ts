@@ -79,4 +79,55 @@ describe('enrichment API', () => {
 
     await app.close();
   });
+
+  it('reprocesses from cache via the route without an API key or any client calls', async () => {
+    handle = openDb(':memory:');
+    const seed = handle.sqlite;
+    const a1 = Number(
+      seed
+        .prepare('INSERT INTO artists (name, name_normalized, mbid) VALUES (?, ?, ?)')
+        .run('Opeth', 'opeth', 'mb-opeth').lastInsertRowid,
+    );
+    // Pre-populate the cache as if a fetch already happened, with no API key set.
+    seed
+      .prepare(
+        `INSERT INTO mb_artist_cache (mbid, found, country, genres_json, tags_json, fetched_at)
+         VALUES ('mb-opeth', 1, 'SE', '[{"name":"progressive metal","weight":5}]', '[]', 0)`,
+      )
+      .run();
+
+    let clientFactoryCalls = 0;
+    const app = buildApp({
+      handle,
+      createLastfmClient: () => {
+        clientFactoryCalls++;
+        throw new Error('should not be called during reprocess');
+      },
+      createMusicBrainzClient: () => {
+        clientFactoryCalls++;
+        throw new Error('should not be called during reprocess');
+      },
+    });
+
+    const start = await app.inject({
+      method: 'POST',
+      url: '/api/enrich',
+      payload: { reprocess: true },
+    });
+    expect(start.statusCode).toBe(202);
+
+    for (let i = 0; i < 50; i++) {
+      const st = await app.inject({ method: 'GET', url: '/api/sync/status' });
+      if (!st.json().running) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(clientFactoryCalls).toBe(0);
+    const artist = seed.prepare('SELECT country FROM artists WHERE id = ?').get(a1) as {
+      country: string | null;
+    };
+    expect(artist.country).toBe('SE');
+
+    await app.close();
+  });
 });

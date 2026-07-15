@@ -180,6 +180,29 @@ export const artistStats = sqliteTable('artist_stats', {
   peakMonthCount: integer('peak_month_count').notNull(),
 });
 
+export const mbSearchCache = sqliteTable('mb_search_cache', {
+  queryNormalized: text('query_normalized').primaryKey(),
+  mbid: text('mbid'),
+  score: real('score'),
+  country: text('country'),
+  fetchedAt: integer('fetched_at').notNull(),
+});
+
+export const mbArtistCache = sqliteTable('mb_artist_cache', {
+  mbid: text('mbid').primaryKey(),
+  found: integer('found').notNull(),
+  country: text('country'),
+  genresJson: text('genres_json').notNull().default('[]'),
+  tagsJson: text('tags_json').notNull().default('[]'),
+  fetchedAt: integer('fetched_at').notNull(),
+});
+
+export const lastfmTagsCache = sqliteTable('lastfm_tags_cache', {
+  cacheKey: text('cache_key').primaryKey(),
+  tagsJson: text('tags_json').notNull(),
+  fetchedAt: integer('fetched_at').notNull(),
+});
+
 export const syncState = sqliteTable('sync_state', {
   source: text('source').primaryKey(),
   cursor: text('cursor'),

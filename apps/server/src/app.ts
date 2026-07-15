@@ -66,6 +66,19 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   app.post('/api/enrich', async (req, reply) => {
+    const body = (req.body as { reprocess?: boolean } | undefined) ?? {};
+
+    // Reprocessing re-derives artists/artist_tags purely from the cached
+    // MusicBrainz/Last.fm responses -- no network, so no API key needed.
+    if (body.reprocess) {
+      const enrichment = new Enrichment(handle, null, null, jobs.reportProgress);
+      const started = jobs.start('enrich-reprocess', async () => {
+        enrichment.reprocessAll();
+      });
+      if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+      return reply.code(202).send({ started: true });
+    }
+
     const apiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
     if (!apiKey) {
       return reply.code(400).send({ error: 'Configure a Last.fm API key first.' });
@@ -110,6 +123,13 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         (SELECT COUNT(*) FROM artists WHERE enrich_status = 'error') AS errored,
         (SELECT COUNT(*) FROM artists WHERE country IS NOT NULL) AS withCountry`);
 
+    // Cache row counts, so it's visible that re-deriving (reprocessAll) after
+    // a schema change won't cost any network time.
+    const cache = one(`SELECT
+        (SELECT COUNT(*) FROM mb_search_cache) AS mbSearches,
+        (SELECT COUNT(*) FROM mb_artist_cache) AS mbArtists,
+        (SELECT COUNT(*) FROM lastfm_tags_cache) AS lastfmTags`);
+
     // Genres/countries weighted by how much the user actually listens (artist
     // playcount), so the summary reflects taste rather than raw catalogue size.
     const topGenres = handle.sqlite
@@ -133,7 +153,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       )
       .all();
 
-    return { ...counts, topArtists, enrichment, topGenres, topCountries };
+    return { ...counts, topArtists, enrichment, cache, topGenres, topCountries };
   });
 
   if (opts.webDistDir && fs.existsSync(opts.webDistDir)) {

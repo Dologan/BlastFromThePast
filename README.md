@@ -21,6 +21,12 @@ Phase 2 of 5 complete:
 - [x] Metadata enrichment: MusicBrainz country + genres, Last.fm artist tags,
       seeded genre hierarchy (`genre_rules`), resumable per-artist enrichment
       job, genre/country stats in the UI
+- [x] Enrichment raw-response cache + parallel fetch: MusicBrainz/Last.fm
+      responses are cached independently of the normalized schema, so a
+      "Reprocess from cache" pass can rebuild `artists`/`artist_tags` after a
+      schema or genre-mapping change with zero network calls; the two
+      services are fetched on concurrent lanes since they rate-limit
+      independently
 - [ ] Filter engine + saved "recipes" (date ranges, neglect, genre, country, …)
 - [ ] Spotify & TIDAL connectors: OAuth, liked-tracks import, playlist push
 - [ ] Presets, anniversaries, playlist history exclusions, mobile styling
@@ -48,9 +54,13 @@ sync fetches your entire scrobble history (a few minutes for large libraries —
 it's resumable if interrupted); subsequent syncs only fetch what's new.
 
 Then hit **Enrich artists** to fetch country of origin and genre tags from
-MusicBrainz + Last.fm. MusicBrainz is rate-limited to ~1 request/second, so a
-few thousand artists take a while; it's resumable and caches permanently, so
-re-running only processes new or previously-failed artists.
+MusicBrainz + Last.fm. MusicBrainz is rate-limited to ~1 request/second (the
+two services are fetched concurrently, so Last.fm's faster limit doesn't add
+to the total), so a large library still takes a while the first time — it's
+resumable, and every response is cached permanently and keyed independently
+of the normalized schema. If you (or a future update) change how that cached
+data is mapped into `artists`/`artist_tags`, use **Reprocess from cache** to
+rebuild the normalized tables instantly, with no network calls at all.
 
 Data lives in `./data/library.db` (override with `BFTP_DB_PATH`). Port/host:
 `BFTP_PORT`, `BFTP_HOST`.
