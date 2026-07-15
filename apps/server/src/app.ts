@@ -1,0 +1,98 @@
+import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyStatic from '@fastify/static';
+import fs from 'node:fs';
+import type { DbHandle } from '@bftp/db';
+import { LastfmClient } from './lastfm/client.js';
+import { LastfmSync } from './sync/lastfmSync.js';
+import { JobManager } from './sync/jobManager.js';
+import { getSetting, setSetting, SETTING_KEYS } from './settings.js';
+
+export interface AppOptions {
+  handle: DbHandle;
+  /** Directory with the built SPA (apps/web/dist); optional in dev/tests. */
+  webDistDir?: string;
+  /** Injectable for tests. */
+  createLastfmClient?: (apiKey: string) => LastfmClient;
+}
+
+export function buildApp(opts: AppOptions): FastifyInstance {
+  const { handle } = opts;
+  const jobs = new JobManager();
+  const createClient = opts.createLastfmClient ?? ((apiKey: string) => new LastfmClient(apiKey));
+
+  const app = Fastify({ logger: true });
+
+  app.get('/api/health', async () => ({ ok: true }));
+
+  app.get('/api/settings', async () => {
+    const apiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
+    return {
+      lastfmUsername: getSetting(handle, SETTING_KEYS.lastfmUsername) ?? null,
+      lastfmApiKeySet: Boolean(apiKey),
+    };
+  });
+
+  app.put('/api/settings', async (req, reply) => {
+    const body = req.body as { lastfmUsername?: string; lastfmApiKey?: string };
+    if (body.lastfmUsername !== undefined) {
+      setSetting(handle, SETTING_KEYS.lastfmUsername, body.lastfmUsername.trim());
+    }
+    if (body.lastfmApiKey !== undefined && body.lastfmApiKey !== '') {
+      setSetting(handle, SETTING_KEYS.lastfmApiKey, body.lastfmApiKey.trim());
+    }
+    reply.code(204);
+  });
+
+  app.post('/api/sync/lastfm', async (req, reply) => {
+    const username = getSetting(handle, SETTING_KEYS.lastfmUsername);
+    const apiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
+    if (!username || !apiKey) {
+      return reply.code(400).send({ error: 'Configure Last.fm username and API key first.' });
+    }
+    const sync = new LastfmSync(handle, createClient(apiKey), username, jobs.reportProgress);
+    const started = jobs.start('lastfm', async () => {
+      await sync.run();
+    });
+    if (!started) return reply.code(409).send({ error: 'A sync is already running.' });
+    return reply.code(202).send({ started: true });
+  });
+
+  app.get('/api/sync/status', async () => {
+    const sources = handle.sqlite
+      .prepare('SELECT source, status, error, last_synced_at AS lastSyncedAt FROM sync_state')
+      .all();
+    return { ...jobs.getStatus(), sources };
+  });
+
+  app.get('/api/library/summary', async () => {
+    const one = (sql: string) =>
+      (handle.sqlite.prepare(sql).get() as Record<string, number | null>) ?? {};
+    const counts = one(`SELECT
+        (SELECT COUNT(*) FROM scrobbles) AS scrobbles,
+        (SELECT COUNT(*) FROM tracks) AS tracks,
+        (SELECT COUNT(*) FROM albums) AS albums,
+        (SELECT COUNT(*) FROM artists) AS artists,
+        (SELECT COUNT(*) FROM liked_tracks) AS liked,
+        (SELECT MIN(uts) FROM scrobbles) AS firstScrobble,
+        (SELECT MAX(uts) FROM scrobbles) AS lastScrobble`);
+    const topArtists = handle.sqlite
+      .prepare(
+        `SELECT a.name, s.playcount
+         FROM artist_stats s JOIN artists a ON a.id = s.artist_id
+         ORDER BY s.playcount DESC LIMIT 10`,
+      )
+      .all();
+    return { ...counts, topArtists };
+  });
+
+  if (opts.webDistDir && fs.existsSync(opts.webDistDir)) {
+    app.register(fastifyStatic, { root: opts.webDistDir });
+    app.setNotFoundHandler((req, reply) => {
+      // SPA fallback for client-side routes; API misses stay 404s.
+      if (req.raw.url?.startsWith('/api/')) return reply.code(404).send({ error: 'Not found' });
+      return reply.sendFile('index.html');
+    });
+  }
+
+  return app;
+}

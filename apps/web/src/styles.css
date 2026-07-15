@@ -1,0 +1,98 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  background: light-dark(#f5f4f2, #17161a);
+  color: light-dark(#222, #e8e6e3);
+}
+
+main {
+  width: min(48rem, 100% - 2rem);
+  padding: 2rem 0 4rem;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+}
+
+.tagline {
+  margin-top: 0;
+  opacity: 0.7;
+}
+
+.panel {
+  background: light-dark(#fff, #211f26);
+  border: 1px solid light-dark(#e2e0dc, #322f38);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel h2 {
+  margin-top: 0.25rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+input {
+  display: block;
+  width: 100%;
+  max-width: 24rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid light-dark(#ccc, #4a4653);
+  border-radius: 6px;
+  background: light-dark(#fff, #17161a);
+  color: inherit;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+button {
+  padding: 0.5rem 1.1rem;
+  border: none;
+  border-radius: 6px;
+  background: #7c5cff;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.hint {
+  opacity: 0.65;
+  font-weight: 400;
+  font-size: 0.9em;
+}
+
+.error {
+  color: light-dark(#b3261e, #ff8a80);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem 1rem;
+}
+
+.sources {
+  list-style: none;
+  padding-left: 0;
+  font-size: 0.9em;
+  opacity: 0.85;
+}
