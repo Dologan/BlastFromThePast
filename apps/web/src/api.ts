@@ -10,13 +10,25 @@ export interface SyncProgress {
   inserted: number;
 }
 
+export interface EnrichProgress {
+  kind: 'enrich';
+  processed: number;
+  total: number;
+  current: string | null;
+}
+
 export interface SyncStatus {
   running: boolean;
   job: string | null;
-  progress: SyncProgress | null;
+  progress: SyncProgress | EnrichProgress | null;
   error: string | null;
   finishedAt: number | null;
   sources: { source: string; status: string; error: string | null; lastSyncedAt: number | null }[];
+}
+
+export interface NamedWeight {
+  name: string;
+  weight: number;
 }
 
 export interface LibrarySummary {
@@ -28,6 +40,9 @@ export interface LibrarySummary {
   firstScrobble: number | null;
   lastScrobble: number | null;
   topArtists: { name: string; playcount: number }[];
+  enrichment: { enriched: number; pending: number; errored: number; withCountry: number };
+  topGenres: NamedWeight[];
+  topCountries: NamedWeight[];
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -49,6 +64,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   startLastfmSync: () => request<{ started: boolean }>('/api/sync/lastfm', { method: 'POST' }),
+  startEnrichment: () => request<{ started: boolean }>('/api/enrich', { method: 'POST' }),
   getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
   getLibrarySummary: () => request<LibrarySummary>('/api/library/summary'),
 };

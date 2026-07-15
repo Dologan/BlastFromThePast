@@ -31,6 +31,12 @@ export interface LovedTracksPage {
   totalPages: number;
 }
 
+export interface WeightedTag {
+  name: string;
+  /** Last.fm returns 0–100 popularity; MusicBrainz returns raw vote counts. */
+  weight: number;
+}
+
 export class LastfmError extends Error {
   constructor(
     message: string,
@@ -161,6 +167,27 @@ export class LastfmClient {
       totalPages: Number(attr.totalPages ?? 1),
       total: Number(attr.total ?? scrobbles.length),
     };
+  }
+
+  /**
+   * Top genre/folksonomy tags for an artist. Prefers mbid when known (exact),
+   * else uses the name with autocorrect. Returns [] when the artist is unknown
+   * to Last.fm (error code 6) so enrichment can continue.
+   */
+  async getArtistTopTags(artist: { name: string; mbid?: string }): Promise<WeightedTag[]> {
+    const params: Record<string, string | number> = { autocorrect: 1 };
+    if (artist.mbid) params.mbid = artist.mbid;
+    else params.artist = artist.name;
+    let body: any;
+    try {
+      body = await this.call('artist.getTopTags', params);
+    } catch (err) {
+      if (err instanceof LastfmError && err.code === 6) return []; // artist not found
+      throw err;
+    }
+    return asArray<any>(body?.toptags?.tag)
+      .map((t) => ({ name: String(t?.name ?? '').trim(), weight: Number(t?.count ?? 0) }))
+      .filter((t) => t.name.length > 0);
   }
 
   async getLovedTracks(user: string, page = 1, limit = 200): Promise<LovedTracksPage> {

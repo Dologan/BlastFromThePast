@@ -5,7 +5,12 @@ import type { DbHandle } from '@bftp/db';
 import { LastfmClient } from './lastfm/client.js';
 import { LastfmSync } from './sync/lastfmSync.js';
 import { JobManager } from './sync/jobManager.js';
+import { MusicBrainzClient } from './enrich/musicbrainz.js';
+import { Enrichment } from './enrich/enrichment.js';
 import { getSetting, setSetting, SETTING_KEYS } from './settings.js';
+
+const MB_USER_AGENT =
+  'BlastFromThePast/0.1 ( https://github.com/dologan/blastfromthepast )';
 
 export interface AppOptions {
   handle: DbHandle;
@@ -13,12 +18,15 @@ export interface AppOptions {
   webDistDir?: string;
   /** Injectable for tests. */
   createLastfmClient?: (apiKey: string) => LastfmClient;
+  createMusicBrainzClient?: () => MusicBrainzClient;
 }
 
 export function buildApp(opts: AppOptions): FastifyInstance {
   const { handle } = opts;
   const jobs = new JobManager();
   const createClient = opts.createLastfmClient ?? ((apiKey: string) => new LastfmClient(apiKey));
+  const createMb =
+    opts.createMusicBrainzClient ?? (() => new MusicBrainzClient(MB_USER_AGENT));
 
   const app = Fastify({ logger: true });
 
@@ -57,6 +65,19 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return reply.code(202).send({ started: true });
   });
 
+  app.post('/api/enrich', async (req, reply) => {
+    const apiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
+    if (!apiKey) {
+      return reply.code(400).send({ error: 'Configure a Last.fm API key first.' });
+    }
+    const enrichment = new Enrichment(handle, createMb(), createClient(apiKey), jobs.reportProgress);
+    const started = jobs.start('enrich', async () => {
+      await enrichment.run();
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true });
+  });
+
   app.get('/api/sync/status', async () => {
     const sources = handle.sqlite
       .prepare('SELECT source, status, error, last_synced_at AS lastSyncedAt FROM sync_state')
@@ -82,7 +103,37 @@ export function buildApp(opts: AppOptions): FastifyInstance {
          ORDER BY s.playcount DESC LIMIT 10`,
       )
       .all();
-    return { ...counts, topArtists };
+
+    const enrichment = one(`SELECT
+        (SELECT COUNT(*) FROM artists WHERE enrich_status = 'done') AS enriched,
+        (SELECT COUNT(*) FROM artists WHERE enrich_status = 'pending') AS pending,
+        (SELECT COUNT(*) FROM artists WHERE enrich_status = 'error') AS errored,
+        (SELECT COUNT(*) FROM artists WHERE country IS NOT NULL) AS withCountry`);
+
+    // Genres/countries weighted by how much the user actually listens (artist
+    // playcount), so the summary reflects taste rather than raw catalogue size.
+    const topGenres = handle.sqlite
+      .prepare(
+        `SELECT t.name, SUM(s.playcount) AS weight
+         FROM artist_tags at
+         JOIN tags t ON t.id = at.tag_id
+         JOIN artist_stats s ON s.artist_id = at.artist_id
+         GROUP BY t.name
+         ORDER BY weight DESC LIMIT 15`,
+      )
+      .all();
+    const topCountries = handle.sqlite
+      .prepare(
+        `SELECT a.country AS name, SUM(s.playcount) AS weight
+         FROM artists a
+         JOIN artist_stats s ON s.artist_id = a.id
+         WHERE a.country IS NOT NULL
+         GROUP BY a.country
+         ORDER BY weight DESC LIMIT 15`,
+      )
+      .all();
+
+    return { ...counts, topArtists, enrichment, topGenres, topCountries };
   });
 
   if (opts.webDistDir && fs.existsSync(opts.webDistDir)) {

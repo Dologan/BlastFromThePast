@@ -1,9 +1,8 @@
-import type { SyncProgress } from './lastfmSync.js';
-
 export interface JobStatus {
   running: boolean;
   job: string | null;
-  progress: SyncProgress | null;
+  /** Job-specific progress payload; the UI interprets it based on `job`. */
+  progress: unknown;
   error: string | null;
   finishedAt: number | null;
 }
@@ -22,7 +21,7 @@ export class JobManager {
     return { ...this.status };
   }
 
-  reportProgress = (p: SyncProgress): void => {
+  reportProgress = (p: unknown): void => {
     this.status.progress = p;
   };
 

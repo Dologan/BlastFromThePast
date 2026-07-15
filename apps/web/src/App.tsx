@@ -51,24 +51,50 @@ function SettingsPanel({ settings, onSaved }: { settings: Settings; onSaved: () 
   );
 }
 
-function SyncPanel({ status, onStart }: { status: SyncStatus | null; onStart: () => void }) {
-  const progress = status?.progress;
+function progressText(status: SyncStatus): string | null {
+  const p = status.progress;
+  if (!status.running || !p) return null;
+  if ('kind' in p && p.kind === 'enrich') {
+    const who = p.current ? ` — ${p.current}` : '';
+    return `Enriching artists: ${p.processed} of ${p.total}${who}`;
+  }
+  if ('phase' in p) {
+    if (p.phase === 'scrobbles' && p.totalPages)
+      return `Scrobbles: page ${p.page} of ${p.totalPages} — ${p.inserted} new`;
+    if (p.phase === 'loved') return `Loved tracks: page ${p.page ?? 1}`;
+    return 'Rebuilding stats…';
+  }
+  return null;
+}
+
+function SyncPanel({
+  status,
+  onSync,
+  onEnrich,
+  pendingEnrich,
+}: {
+  status: SyncStatus | null;
+  onSync: () => void;
+  onEnrich: () => void;
+  pendingEnrich: number;
+}) {
+  const running = status?.running ?? false;
+  const text = status ? progressText(status) : null;
   return (
     <section className="panel">
       <h2>Sync</h2>
-      <button onClick={onStart} disabled={status?.running ?? false}>
-        {status?.running ? 'Syncing…' : 'Sync Last.fm now'}
-      </button>
-      {status?.running && progress && (
-        <p>
-          {progress.phase === 'scrobbles' && progress.totalPages
-            ? `Scrobbles: page ${progress.page} of ${progress.totalPages} — ${progress.inserted} new`
-            : progress.phase === 'loved'
-              ? `Loved tracks: page ${progress.page ?? 1}`
-              : 'Rebuilding stats…'}
-        </p>
-      )}
-      {status?.error && <p className="error">Last sync failed: {status.error}</p>}
+      <div className="actions">
+        <button onClick={onSync} disabled={running}>
+          {running && status?.job === 'lastfm' ? 'Syncing…' : 'Sync Last.fm now'}
+        </button>
+        <button onClick={onEnrich} disabled={running}>
+          {running && status?.job === 'enrich'
+            ? 'Enriching…'
+            : `Enrich artists${pendingEnrich > 0 ? ` (${pendingEnrich})` : ''}`}
+        </button>
+      </div>
+      {text && <p>{text}</p>}
+      {status?.error && <p className="error">Last job failed: {status.error}</p>}
       <ul className="sources">
         {status?.sources.map((s) => (
           <li key={s.source}>
@@ -78,6 +104,51 @@ function SyncPanel({ status, onStart }: { status: SyncStatus | null; onStart: ()
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+function BarList({ items }: { items: { name: string; weight: number }[] }) {
+  const max = items.reduce((m, i) => Math.max(m, i.weight), 0) || 1;
+  return (
+    <ul className="bars">
+      {items.map((i) => (
+        <li key={i.name}>
+          <span className="bar-label">{i.name}</span>
+          <span className="bar-track">
+            <span className="bar-fill" style={{ width: `${(i.weight / max) * 100}%` }} />
+          </span>
+          <span className="hint">{i.weight.toLocaleString()}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TastePanel({ summary }: { summary: LibrarySummary }) {
+  const e = summary.enrichment;
+  const hasData = summary.topGenres.length > 0 || summary.topCountries.length > 0;
+  return (
+    <section className="panel">
+      <h2>Genres &amp; countries</h2>
+      <p className="hint">
+        {e.enriched.toLocaleString()} of {summary.artists.toLocaleString()} artists enriched
+        {e.pending > 0 ? `, ${e.pending.toLocaleString()} pending` : ''}
+        {e.errored > 0 ? `, ${e.errored.toLocaleString()} errored` : ''} · {e.withCountry.toLocaleString()} with a country
+      </p>
+      {!hasData && <p className="hint">Run “Enrich artists” to populate genres and countries.</p>}
+      {summary.topGenres.length > 0 && (
+        <>
+          <h3>Top genres</h3>
+          <BarList items={summary.topGenres} />
+        </>
+      )}
+      {summary.topCountries.length > 0 && (
+        <>
+          <h3>Top countries</h3>
+          <BarList items={summary.topCountries} />
+        </>
+      )}
     </section>
   );
 }
@@ -152,9 +223,9 @@ export default function App() {
     return () => clearInterval(t);
   }, [status?.running, refresh]);
 
-  const startSync = async () => {
+  const runJob = async (start: () => Promise<unknown>) => {
     try {
-      await api.startLastfmSync();
+      await start();
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -169,8 +240,14 @@ export default function App() {
       {settings && (
         <SettingsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
       )}
-      <SyncPanel status={status} onStart={startSync} />
+      <SyncPanel
+        status={status}
+        onSync={() => runJob(api.startLastfmSync)}
+        onEnrich={() => runJob(api.startEnrichment)}
+        pendingEnrich={summary?.enrichment.pending ?? 0}
+      />
       <LibraryPanel summary={summary} />
+      {summary && <TastePanel summary={summary} />}
     </main>
   );
 }
