@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type LibrarySummary, type Settings, type SyncStatus } from './api';
+import RecipeBuilder from './RecipeBuilder';
 
 function formatDate(uts: number | null): string {
   if (!uts) return '—';
@@ -210,7 +211,7 @@ function LibraryPanel({ summary }: { summary: LibrarySummary | null }) {
   );
 }
 
-export default function App() {
+function Dashboard() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [summary, setSummary] = useState<LibrarySummary | null>(null);
@@ -249,9 +250,7 @@ export default function App() {
   };
 
   return (
-    <main>
-      <h1>Blast From The Past</h1>
-      <p className="tagline">Rediscover your music from your Last.fm history.</p>
+    <>
       {error && <p className="error">{error}</p>}
       {settings && (
         <SettingsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
@@ -266,6 +265,31 @@ export default function App() {
       />
       <LibraryPanel summary={summary} />
       {summary && <TastePanel summary={summary} />}
+    </>
+  );
+}
+
+type Tab = 'dashboard' | 'builder';
+
+export default function App() {
+  const [tab, setTab] = useState<Tab>('dashboard');
+  return (
+    <main>
+      <header className="app-header">
+        <div>
+          <h1>Blast From The Past</h1>
+          <p className="tagline">Rediscover your music from your Last.fm history.</p>
+        </div>
+        <nav className="tabs">
+          <button className={tab === 'dashboard' ? 'tab on' : 'tab'} onClick={() => setTab('dashboard')}>
+            Dashboard
+          </button>
+          <button className={tab === 'builder' ? 'tab on' : 'tab'} onClick={() => setTab('builder')}>
+            Recipe builder
+          </button>
+        </nav>
+      </header>
+      {tab === 'dashboard' ? <Dashboard /> : <RecipeBuilder />}
     </main>
   );
 }

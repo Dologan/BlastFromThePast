@@ -7,7 +7,9 @@ import { LastfmSync } from './sync/lastfmSync.js';
 import { JobManager } from './sync/jobManager.js';
 import { MusicBrainzClient } from './enrich/musicbrainz.js';
 import { Enrichment } from './enrich/enrichment.js';
+import { RecipeService } from './recipes/recipeService.js';
 import { getSetting, setSetting, SETTING_KEYS } from './settings.js';
+import type { Recipe } from '@bftp/core';
 
 const MB_USER_AGENT =
   'BlastFromThePast/0.1 ( https://github.com/dologan/blastfromthepast )';
@@ -27,6 +29,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   const createClient = opts.createLastfmClient ?? ((apiKey: string) => new LastfmClient(apiKey));
   const createMb =
     opts.createMusicBrainzClient ?? (() => new MusicBrainzClient(MB_USER_AGENT));
+  const recipes = new RecipeService(handle);
 
   const app = Fastify({ logger: true });
 
@@ -154,6 +157,48 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       .all();
 
     return { ...counts, topArtists, enrichment, cache, topGenres, topCountries };
+  });
+
+  app.get('/api/facets', async () => recipes.facets());
+
+  app.post('/api/recipes/preview', async (req, reply) => {
+    const recipe = req.body as Recipe | undefined;
+    if (!recipe || !recipe.output || !Array.isArray(recipe.filters)) {
+      return reply.code(400).send({ error: 'Invalid recipe.' });
+    }
+    try {
+      return recipes.preview(recipe);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/recipes', async () => recipes.list());
+
+  app.post('/api/recipes', async (req, reply) => {
+    const body = req.body as { name?: string; definition?: Recipe } | undefined;
+    if (!body?.name || !body.definition) {
+      return reply.code(400).send({ error: 'name and definition are required.' });
+    }
+    return reply.code(201).send(recipes.create(body.name, body.definition));
+  });
+
+  app.put('/api/recipes/:id', async (req, reply) => {
+    const body = req.body as { name?: string; definition?: Recipe } | undefined;
+    const id = Number((req.params as { id: string }).id);
+    if (!body?.name || !body.definition) {
+      return reply.code(400).send({ error: 'name and definition are required.' });
+    }
+    if (!recipes.update(id, body.name, body.definition)) {
+      return reply.code(404).send({ error: 'Recipe not found.' });
+    }
+    reply.code(204);
+  });
+
+  app.delete('/api/recipes/:id', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!recipes.remove(id)) return reply.code(404).send({ error: 'Recipe not found.' });
+    reply.code(204);
   });
 
   if (opts.webDistDir && fs.existsSync(opts.webDistDir)) {

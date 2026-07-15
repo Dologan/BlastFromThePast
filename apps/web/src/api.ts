@@ -1,6 +1,39 @@
+import type { Recipe } from './recipeTypes';
+
 export interface Settings {
   lastfmUsername: string | null;
   lastfmApiKeySet: boolean;
+}
+
+export interface PreviewRow {
+  entityId: number;
+  entityKind: 'track' | 'album';
+  name: string;
+  artistName: string;
+  albumName: string | null;
+  playcount: number;
+  firstListen: number;
+  lastListen: number;
+  spotifyUrl: string;
+  tidalUrl: string;
+}
+
+export interface PreviewResult {
+  matched: number;
+  rows: PreviewRow[];
+}
+
+export interface SavedRecipe {
+  id: number;
+  name: string;
+  definition: Recipe;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Facets {
+  countries: string[];
+  genres: string[];
 }
 
 export interface SyncProgress {
@@ -78,4 +111,26 @@ export const api = {
     }),
   getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
   getLibrarySummary: () => request<LibrarySummary>('/api/library/summary'),
+
+  getFacets: () => request<Facets>('/api/facets'),
+  previewRecipe: (recipe: Recipe) =>
+    request<PreviewResult>('/api/recipes/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(recipe),
+    }),
+  listRecipes: () => request<SavedRecipe[]>('/api/recipes'),
+  createRecipe: (name: string, definition: Recipe) =>
+    request<SavedRecipe>('/api/recipes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, definition }),
+    }),
+  updateRecipe: (id: number, name: string, definition: Recipe) =>
+    request<void>(`/api/recipes/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, definition }),
+    }),
+  deleteRecipe: (id: number) => request<void>(`/api/recipes/${id}`, { method: 'DELETE' }),
 };

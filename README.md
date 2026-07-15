@@ -10,7 +10,7 @@ one-time backfill, syncs are fast and incremental.
 
 ## Status
 
-Phase 2 of 5 complete:
+Phase 3 of 5 complete:
 
 - [x] Monorepo scaffold (npm workspaces, TypeScript everywhere)
 - [x] SQLite schema + migrations (scrobbles, entities, tags, stats, service links)
@@ -27,9 +27,16 @@ Phase 2 of 5 complete:
       schema or genre-mapping change with zero network calls; the two
       services are fetched on concurrent lanes since they rate-limit
       independently
-- [ ] Filter engine + saved "recipes" (date ranges, neglect, genre, country, …)
-- [ ] Spotify & TIDAL connectors: OAuth, liked-tracks import, playlist push
-- [ ] Presets, anniversaries, playlist history exclusions, mobile styling
+- [x] Filter engine + saved "recipes": a JSON filter AST compiled to SQL
+      over the materialized stats — date ranges (first/last/peak listen),
+      "haven't played in N days", play-count ranges, genre (with subgenre
+      hierarchy), country, loved/liked, playlist-history exclusion; output
+      shaping (albums/tracks, neglect/recency/weighted-shuffle sorts, limit,
+      per-artist diversity cap); recipe builder UI with live preview and
+      Spotify/TIDAL deep links
+- [ ] Spotify & TIDAL connectors: OAuth, liked-tracks import, precise
+      playlist push (upgrading the search deep links to exact matches)
+- [ ] Presets, anniversaries, mobile styling
 
 ## Running
 
@@ -68,11 +75,22 @@ Data lives in `./data/library.db` (override with `BFTP_DB_PATH`). Port/host:
 ## Layout
 
 ```
-apps/server     Fastify API + sync jobs (runs via tsx, no build step)
-apps/web        React + Vite SPA
-packages/core   domain types, name normalization, service-connector interfaces
-packages/db     SQLite schema, migrations, drizzle setup
+apps/server     Fastify API + sync/enrich jobs + recipe service (tsx, no build step)
+apps/web        React + Vite SPA (dashboard + recipe builder)
+packages/core   domain types, name normalization, connector interfaces,
+                recipe AST, genre resolver, recipe→SQL compiler, deep links
+packages/db     SQLite schema, migrations, drizzle setup, custom SQL functions
 ```
+
+## How recipes work
+
+A **recipe** is a saved JSON filter definition plus output shaping. The
+`packages/core` compiler turns it into a single parameterized SQL query over
+the materialized per-track/album/artist stats, so previews are instant even on
+a large library. Genre filtering understands a hierarchy — asking for `metal`
+also matches `progressive metal`, `djent`, etc. via the seeded (user-editable)
+`genre_rules` table plus a whole-word fallback. Results link straight out to
+Spotify/TIDAL search; Phase 4 upgrades those to exact track matches.
 
 ## Tests
 
