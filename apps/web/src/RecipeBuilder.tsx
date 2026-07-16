@@ -150,6 +150,73 @@ function ChipInput({
   );
 }
 
+/** A number input with a slider above it, for filters where dragging beats typing. */
+function SliderField({
+  label,
+  value,
+  onChange,
+  min = 0,
+  max,
+  step = 1,
+  allowEmpty,
+  placeholder,
+}: {
+  label?: string;
+  value: number | undefined;
+  onChange: (v: number | undefined) => void;
+  min?: number;
+  max: number;
+  step?: number;
+  /** If true, an empty number input clears the value (for optional min/max bounds). */
+  allowEmpty?: boolean;
+  placeholder?: string;
+}) {
+  const clamped = Math.min(Math.max(value ?? min, min), max);
+  return (
+    <label className="inline slider-field">
+      {label}
+      <span className="slider-stack">
+        <input type="range" min={min} max={max} step={step} value={clamped} onChange={(e) => onChange(Number(e.target.value))} />
+        <input
+          type="number"
+          min={min}
+          step={step}
+          placeholder={placeholder}
+          value={value ?? (allowEmpty ? '' : min)}
+          onChange={(e) => onChange(e.target.value === '' && allowEmpty ? undefined : Number(e.target.value))}
+        />
+      </span>
+    </label>
+  );
+}
+
+const DAY_UNITS = { days: 1, months: 30, years: 365 } as const;
+type DayUnit = keyof typeof DAY_UNITS;
+
+/** A day-count input that also accepts months/years, with a slider scaled to the chosen unit. */
+function DaysInput({ days, onChange, maxDays = 3650 }: { days: number; onChange: (days: number) => void; maxDays?: number }) {
+  const [unit, setUnit] = useState<DayUnit>(
+    days > 0 && days % 365 === 0 ? 'years' : days > 0 && days % 30 === 0 ? 'months' : 'days',
+  );
+  const factor = DAY_UNITS[unit];
+  const displayValue = Math.round(days / factor);
+  const sliderMax = Math.max(1, Math.round(maxDays / factor));
+  const set = (n: number) => onChange(Math.max(0, Math.round(n)) * factor);
+  return (
+    <div className="days-input">
+      <input type="range" min={0} max={sliderMax} value={Math.min(displayValue, sliderMax)} onChange={(e) => set(Number(e.target.value))} />
+      <span className="days-input-row">
+        <input type="number" min={0} value={displayValue} onChange={(e) => set(Number(e.target.value))} />
+        <select value={unit} onChange={(e) => setUnit(e.target.value as DayUnit)}>
+          <option value="days">days</option>
+          <option value="months">months</option>
+          <option value="years">years</option>
+        </select>
+      </span>
+    </div>
+  );
+}
+
 function ClauseEditor({
   clause,
   facets,
@@ -202,20 +269,7 @@ function ClauseEditor({
     case 'notPlayedInDays':
     case 'playedInDays':
     case 'excludeRecentlyPlaylisted':
-      return (
-        <label className="inline">
-          <input
-            type="number"
-            min={1}
-            value={clause.days}
-            onChange={(e) => onChange({ ...clause, days: Number(e.target.value) })}
-          />
-          days
-          {clause.type !== 'excludeRecentlyPlaylisted' && (
-            <span className="hint"> ({(clause.days / 365).toFixed(1)} years)</span>
-          )}
-        </label>
-      );
+      return <DaysInput days={clause.days} onChange={(days) => onChange({ ...clause, days })} />;
     case 'firstListen':
     case 'lastListen':
       return (
@@ -239,10 +293,9 @@ function ClauseEditor({
     }
     case 'playcount':
       return (
-        <div className="daterange">
-          <input type="number" min={0} placeholder="min" value={clause.min ?? ''} onChange={(e) => onChange({ ...clause, min: e.target.value === '' ? undefined : Number(e.target.value) })} />
-          <span>–</span>
-          <input type="number" min={0} placeholder="max" value={clause.max ?? ''} onChange={(e) => onChange({ ...clause, max: e.target.value === '' ? undefined : Number(e.target.value) })} />
+        <div className="minmax-sliders">
+          <SliderField label="min" value={clause.min} onChange={(min) => onChange({ ...clause, min })} max={200} allowEmpty placeholder="—" />
+          <SliderField label="max" value={clause.max} onChange={(max) => onChange({ ...clause, max })} max={200} allowEmpty placeholder="—" />
         </div>
       );
     case 'loved':
@@ -261,7 +314,7 @@ function ClauseEditor({
             <option value="lastListen">last listened</option>
           </select>
           <span>within</span>
-          <input type="number" min={0} value={clause.windowDays} onChange={(e) => onChange({ ...clause, windowDays: Number(e.target.value) })} style={{ width: '4rem' }} />
+          <SliderField value={clause.windowDays} onChange={(v) => onChange({ ...clause, windowDays: v ?? 0 })} max={30} />
           <span>days of today (any year)</span>
         </div>
       );
