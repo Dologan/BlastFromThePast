@@ -150,6 +150,8 @@ export const trackStats = sqliteTable(
     playcount: integer('playcount').notNull(),
     peakMonth: text('peak_month').notNull(),
     peakMonthCount: integer('peak_month_count').notNull(),
+    /** Widest gap between two consecutive plays, in days; NULL if fewer than 2 plays. */
+    maxGapDays: real('max_gap_days'),
   },
   (t) => [
     index('idx_track_stats_first').on(t.firstListen),
@@ -167,6 +169,7 @@ export const albumStats = sqliteTable('album_stats', {
   playcount: integer('playcount').notNull(),
   peakMonth: text('peak_month').notNull(),
   peakMonthCount: integer('peak_month_count').notNull(),
+  maxGapDays: real('max_gap_days'),
 });
 
 export const artistStats = sqliteTable('artist_stats', {

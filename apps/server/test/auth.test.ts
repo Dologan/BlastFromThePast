@@ -67,9 +67,10 @@ describe('AuthManager', () => {
     // Exchange sent the code + a verifier.
     expect(calls[0]!.body).toContain('code=the-code');
     expect(calls[0]!.body).toContain('code_verifier=');
-    // Stored ciphertext is not the plaintext token.
+    // Stored ciphertext is not the plaintext token (base64 ciphertext can
+    // coincidentally contain the substring 'AT', so compare for exact equality).
     const raw = handle.sqlite.prepare("SELECT access_token FROM service_auth WHERE service='spotify'").get() as { access_token: string };
-    expect(raw.access_token).not.toContain('AT');
+    expect(raw.access_token).not.toBe('AT');
   });
 
   it('rejects a callback with an unknown state', async () => {

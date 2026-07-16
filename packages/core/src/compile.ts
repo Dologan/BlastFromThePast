@@ -151,6 +151,18 @@ function compileClause(clause: Clause, g: Grain, ctx: CompileContext, params: un
       // Circular distance on the calendar wheel (handles Dec/Jan wraparound).
       return `(ABS(${e} - ${today}) <= ${w} OR 366 - ABS(${e} - ${today}) <= ${w})`;
     }
+    case 'gapDays': {
+      const ongoingDays = `((${ctx.nowSeconds} - ${S}.last_listen) / 86400.0)`;
+      if (clause.infinite) {
+        const parts = [`(${S}.max_gap_days IS NULL OR ${ongoingDays} > ${S}.max_gap_days)`];
+        if (clause.minDays !== undefined) parts.push(`${ongoingDays} >= ${Math.floor(clause.minDays)}`);
+        return parts.join(' AND ');
+      }
+      const parts = [`${S}.max_gap_days IS NOT NULL`];
+      if (clause.minDays !== undefined) parts.push(`${S}.max_gap_days >= ${Math.floor(clause.minDays)}`);
+      if (clause.maxDays !== undefined) parts.push(`${S}.max_gap_days <= ${Math.floor(clause.maxDays)}`);
+      return parts.join(' AND ');
+    }
   }
 }
 

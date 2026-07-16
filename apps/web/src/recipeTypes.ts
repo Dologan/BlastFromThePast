@@ -18,7 +18,8 @@ export type Clause =
   | { type: 'genre'; anyOf: string[]; mode?: 'canonical' | 'raw' }
   | { type: 'country'; anyOf: string[]; negate?: boolean }
   | { type: 'excludeRecentlyPlaylisted'; days: number }
-  | { type: 'anniversary'; field?: 'firstListen' | 'lastListen'; windowDays: number };
+  | { type: 'anniversary'; field?: 'firstListen' | 'lastListen'; windowDays: number }
+  | { type: 'gapDays'; minDays?: number; maxDays?: number; infinite?: boolean };
 
 export type ClauseType = Clause['type'];
 export type OutputMode = 'tracks' | 'albums';

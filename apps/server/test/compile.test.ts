@@ -254,4 +254,30 @@ describe('compileRecipe (executed)', () => {
     expect(names).toContain('Harvest');
     expect(names).not.toContain('Benighted');
   });
+
+  it('filters by bridged gap size, and by "infinite" (still-unresolved) gaps', () => {
+    const opethId = (handle.sqlite.prepare("SELECT id FROM artists WHERE name='Opeth'").get() as any).id;
+    // A ~3-year gap that WAS bridged — it was played again two days ago, so
+    // its current silence (2 days) is tiny next to its historical max.
+    const bridged = Number(
+      handle.sqlite.prepare('INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, ?, ?)').run(opethId, 'Bridged', 'bridged').lastInsertRowid,
+    );
+    handle.sqlite.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(bridged, NOW - 3 * YEAR);
+    handle.sqlite.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(bridged, NOW - 2 * DAY);
+    rebuildStats(handle.sqlite);
+
+    // Ghost of Perdition's widest bridged gap is ~363 days; Bridged's is ~3 years.
+    const wide = run({ filters: [{ type: 'gapDays', minDays: 365 }], output: output({ limit: 100 }) });
+    expect(wide.rows.map((r) => r.name)).toEqual(['Bridged']);
+
+    // "Infinite" = currently silent for longer than any gap it has ever
+    // bridged (or it has no bridged gap at all). Bridged just returned, so
+    // it's excluded; everything else here has gone quiet for longer than
+    // its own past pauses.
+    const infinite = run({ filters: [{ type: 'gapDays', infinite: true }], output: output({ limit: 100 }) });
+    const infiniteNames = infinite.rows.map((r) => r.name);
+    expect(infiniteNames).not.toContain('Bridged');
+    expect(infiniteNames).toContain('Ghost of Perdition');
+    expect(infiniteNames).toContain('Not Strong Enough'); // single play, no bridged gap at all
+  });
 });

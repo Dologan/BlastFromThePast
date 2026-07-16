@@ -342,6 +342,13 @@ input[type='range'] {
   flex-wrap: wrap;
 }
 
+.days-input-labeled {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+
 .days-input {
   display: flex;
   flex-direction: column;

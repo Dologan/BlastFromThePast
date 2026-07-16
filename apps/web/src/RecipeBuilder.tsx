@@ -26,6 +26,7 @@ const CLAUSE_LABELS: Record<ClauseType, string> = {
   country: 'Country of origin',
   notPlayedInDays: "Haven't played in…",
   playedInDays: 'Played within…',
+  gapDays: 'Gap between plays',
   anniversary: 'On this day (anniversary)',
   firstListen: 'First listened between',
   lastListen: 'Last listened between',
@@ -40,6 +41,7 @@ const CLAUSE_ORDER: ClauseType[] = [
   'country',
   'notPlayedInDays',
   'playedInDays',
+  'gapDays',
   'anniversary',
   'firstListen',
   'lastListen',
@@ -59,6 +61,8 @@ function defaultClause(type: ClauseType): Clause {
       return { type, days: 730 };
     case 'playedInDays':
       return { type, days: 90 };
+    case 'gapDays':
+      return { type, infinite: true };
     case 'firstListen':
     case 'lastListen':
     case 'peakMonth':
@@ -86,6 +90,8 @@ function isMeaningful(c: Clause): boolean {
       return Boolean(c.after || c.before);
     case 'playcount':
       return c.min !== undefined || c.max !== undefined;
+    case 'gapDays':
+      return Boolean(c.infinite) || c.minDays !== undefined || c.maxDays !== undefined;
     default:
       return true;
   }
@@ -270,6 +276,36 @@ function ClauseEditor({
     case 'playedInDays':
     case 'excludeRecentlyPlaylisted':
       return <DaysInput days={clause.days} onChange={(days) => onChange({ ...clause, days })} />;
+    case 'gapDays':
+      return (
+        <>
+          <label className="inline">
+            <input
+              type="checkbox"
+              checked={clause.infinite ?? false}
+              onChange={(e) => onChange({ ...clause, infinite: e.target.checked })}
+            />
+            still ongoing — hasn't returned from its biggest-ever pause yet
+          </label>
+          {clause.infinite ? (
+            <div className="days-input-labeled">
+              <span className="hint">and has been silent for at least</span>
+              <DaysInput days={clause.minDays ?? 0} onChange={(minDays) => onChange({ ...clause, minDays: minDays || undefined })} />
+            </div>
+          ) : (
+            <div className="minmax-sliders">
+              <div className="days-input-labeled">
+                <span className="hint">min gap</span>
+                <DaysInput days={clause.minDays ?? 0} onChange={(minDays) => onChange({ ...clause, minDays: minDays || undefined })} />
+              </div>
+              <div className="days-input-labeled">
+                <span className="hint">max gap</span>
+                <DaysInput days={clause.maxDays ?? 3650} onChange={(maxDays) => onChange({ ...clause, maxDays: maxDays || undefined })} />
+              </div>
+            </div>
+          )}
+        </>
+      );
     case 'firstListen':
     case 'lastListen':
       return (

@@ -2,7 +2,8 @@ import type Database from 'better-sqlite3';
 
 /**
  * Rebuild the materialized listening stats (first/last listen, playcount,
- * peak month) for tracks, albums and artists from the scrobbles table.
+ * peak month, widest bridged gap between plays) for tracks, albums and
+ * artists from the scrobbles table.
  *
  * A full rebuild is a single SQL pass per table and stays well under a second
  * even for libraries with hundreds of thousands of scrobbles, so we favour
@@ -12,31 +13,43 @@ export function rebuildStats(sqlite: Database.Database): void {
   const rebuild = sqlite.transaction(() => {
     sqlite.exec(`
       DELETE FROM track_stats;
-      INSERT INTO track_stats (track_id, first_listen, last_listen, playcount, peak_month, peak_month_count)
+      INSERT INTO track_stats (track_id, first_listen, last_listen, playcount, peak_month, peak_month_count, max_gap_days)
       WITH monthly AS (
         SELECT track_id AS eid, strftime('%Y-%m', uts, 'unixepoch') AS ym, COUNT(*) AS c
         FROM scrobbles GROUP BY eid, ym
       ), peaks AS (
         SELECT eid, ym, c, ROW_NUMBER() OVER (PARTITION BY eid ORDER BY c DESC, ym ASC) AS rn
         FROM monthly
+      ), gaps AS (
+        SELECT track_id AS eid, (uts - LAG(uts) OVER (PARTITION BY track_id ORDER BY uts)) / 86400.0 AS gap_days
+        FROM scrobbles
+      ), maxgaps AS (
+        SELECT eid, MAX(gap_days) AS max_gap_days FROM gaps WHERE gap_days IS NOT NULL GROUP BY eid
       )
-      SELECT s.track_id, MIN(s.uts), MAX(s.uts), COUNT(*), p.ym, p.c
+      SELECT s.track_id, MIN(s.uts), MAX(s.uts), COUNT(*), p.ym, p.c, mg.max_gap_days
       FROM scrobbles s
       JOIN peaks p ON p.eid = s.track_id AND p.rn = 1
+      LEFT JOIN maxgaps mg ON mg.eid = s.track_id
       GROUP BY s.track_id;
 
       DELETE FROM album_stats;
-      INSERT INTO album_stats (album_id, first_listen, last_listen, playcount, peak_month, peak_month_count)
+      INSERT INTO album_stats (album_id, first_listen, last_listen, playcount, peak_month, peak_month_count, max_gap_days)
       WITH monthly AS (
         SELECT album_id AS eid, strftime('%Y-%m', uts, 'unixepoch') AS ym, COUNT(*) AS c
         FROM scrobbles WHERE album_id IS NOT NULL GROUP BY eid, ym
       ), peaks AS (
         SELECT eid, ym, c, ROW_NUMBER() OVER (PARTITION BY eid ORDER BY c DESC, ym ASC) AS rn
         FROM monthly
+      ), gaps AS (
+        SELECT album_id AS eid, (uts - LAG(uts) OVER (PARTITION BY album_id ORDER BY uts)) / 86400.0 AS gap_days
+        FROM scrobbles WHERE album_id IS NOT NULL
+      ), maxgaps AS (
+        SELECT eid, MAX(gap_days) AS max_gap_days FROM gaps WHERE gap_days IS NOT NULL GROUP BY eid
       )
-      SELECT s.album_id, MIN(s.uts), MAX(s.uts), COUNT(*), p.ym, p.c
+      SELECT s.album_id, MIN(s.uts), MAX(s.uts), COUNT(*), p.ym, p.c, mg.max_gap_days
       FROM scrobbles s
       JOIN peaks p ON p.eid = s.album_id AND p.rn = 1
+      LEFT JOIN maxgaps mg ON mg.eid = s.album_id
       WHERE s.album_id IS NOT NULL
       GROUP BY s.album_id;
 

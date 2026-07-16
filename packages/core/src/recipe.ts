@@ -29,7 +29,13 @@ export type Clause =
   | { type: 'excludeRecentlyPlaylisted'; days: number }
   // First/last listen fell within ±windowDays of today's calendar day, in any
   // year — the "on this day" / anniversaries filter.
-  | { type: 'anniversary'; field?: 'firstListen' | 'lastListen'; windowDays: number };
+  | { type: 'anniversary'; field?: 'firstListen' | 'lastListen'; windowDays: number }
+  // Widest gap between two consecutive plays. `infinite` selects entities
+  // whose *current* silence since the last play already exceeds every past,
+  // already-bridged gap (or who have no bridged gap at all) — i.e. they
+  // haven't returned from their biggest-ever pause yet, unlike a min/max
+  // range which looks at gaps that were already bridged by a later play.
+  | { type: 'gapDays'; minDays?: number; maxDays?: number; infinite?: boolean };
 
 export type ClauseType = Clause['type'];
 
