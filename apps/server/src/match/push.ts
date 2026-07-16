@@ -29,6 +29,10 @@ export interface PushResult {
   unmatched: UnmatchedTrack[];
   /** Matches below this confidence — worth a human glance in a fix-up view. */
   lowConfidence: UnmatchedTrack[];
+  /** Set if matched tracks couldn't be searched/looked up (search API errors), rather than simply not found. */
+  matchError?: string;
+  /** Set if the playlist was created but adding the matched tracks to it failed. */
+  itemsError?: string;
 }
 
 const LOW_CONFIDENCE = 0.6;
@@ -55,8 +59,17 @@ export async function pushPlaylist(
   const lowConfidence: UnmatchedTrack[] = [];
 
   let processed = 0;
+  let matchError: string | undefined;
   for (const t of tracks) {
-    const result = await matcher.match(t.trackId);
+    let result: Awaited<ReturnType<typeof matcher.match>> = null;
+    try {
+      result = await matcher.match(t.trackId);
+    } catch (err) {
+      // A single search failure (e.g. a transient service error) shouldn't
+      // abort the whole push — record it, treat the track as unmatched, and
+      // keep going so the rest of the playlist still gets built.
+      matchError = err instanceof Error ? err.message : String(err);
+    }
     if (result) {
       matchedIds.push(result.serviceId);
       matchedTrackIds.push(t.trackId);
@@ -71,30 +84,42 @@ export async function pushPlaylist(
   }
 
   const playlistId = await connector.createPlaylist(name, description);
+  let itemsError: string | undefined;
   if (matchedIds.length > 0) {
-    await connector.setPlaylistTracks(playlistId, matchedIds);
+    try {
+      await connector.setPlaylistTracks(playlistId, matchedIds);
+    } catch (err) {
+      // The playlist exists but adding tracks failed — surface this instead
+      // of leaving the caller with an empty, unexplained playlist.
+      itemsError = err instanceof Error ? err.message : String(err);
+    }
   }
 
-  // Log the push and its tracks for later "exclude recently playlisted" filters.
-  const logId = Number(
-    handle.sqlite
-      .prepare('INSERT INTO playlist_log (service, service_playlist_id, name, created_at) VALUES (?, ?, ?, ?)')
-      .run(service, playlistId, name, Math.floor(Date.now() / 1000)).lastInsertRowid,
-  );
-  const logTrack = handle.sqlite.prepare(
-    'INSERT OR IGNORE INTO playlist_log_tracks (playlist_log_id, track_id) VALUES (?, ?)',
-  );
-  const logAll = handle.sqlite.transaction(() => {
-    for (const trackId of matchedTrackIds) logTrack.run(logId, trackId);
-  });
-  logAll();
+  // Log the push and its tracks for later "exclude recently playlisted"
+  // filters — but only tracks that were actually added to the real playlist.
+  if (!itemsError && matchedTrackIds.length > 0) {
+    const logId = Number(
+      handle.sqlite
+        .prepare('INSERT INTO playlist_log (service, service_playlist_id, name, created_at) VALUES (?, ?, ?, ?)')
+        .run(service, playlistId, name, Math.floor(Date.now() / 1000)).lastInsertRowid,
+    );
+    const logTrack = handle.sqlite.prepare(
+      'INSERT OR IGNORE INTO playlist_log_tracks (playlist_log_id, track_id) VALUES (?, ?)',
+    );
+    const logAll = handle.sqlite.transaction(() => {
+      for (const trackId of matchedTrackIds) logTrack.run(logId, trackId);
+    });
+    logAll();
+  }
 
   return {
     playlistId,
     playlistUrl: connector.deepLinkPlaylist(playlistId),
     service,
-    matchedCount: matchedIds.length,
+    matchedCount: itemsError ? 0 : matchedIds.length,
     unmatched,
     lowConfidence,
+    ...(matchError ? { matchError } : {}),
+    ...(itemsError ? { itemsError } : {}),
   };
 }

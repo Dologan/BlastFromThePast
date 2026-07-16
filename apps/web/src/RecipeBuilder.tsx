@@ -444,14 +444,22 @@ export default function RecipeBuilder() {
     try {
       await api.push(recipe, service, playlistName, [...selected]);
       // Poll until the background push job finishes, then read its result.
-      for (let i = 0; i < 200; i++) {
-        const st = await api.getSyncStatus();
-        if (!st.running) break;
+      let lastStatus = await api.getSyncStatus();
+      for (let i = 0; i < 200 && lastStatus.running; i++) {
         await new Promise((r) => setTimeout(r, 750));
+        lastStatus = await api.getSyncStatus();
       }
       const { result } = await api.getPushResult();
       setPushResult(result);
-      setPushMsg(result ? null : 'Push finished but returned no result.');
+      if (result?.itemsError) {
+        setPushMsg(`Playlist "${playlistName}" was created, but adding tracks to it failed: ${result.itemsError}`);
+      } else if (result?.matchError) {
+        setPushMsg(`Some tracks couldn't be searched for: ${result.matchError}`);
+      } else if (!result) {
+        setPushMsg(lastStatus.error ? `Push failed: ${lastStatus.error}` : 'Push finished but returned no result.');
+      } else {
+        setPushMsg(null);
+      }
     } catch (err) {
       setPushMsg(err instanceof Error ? err.message : String(err));
     } finally {

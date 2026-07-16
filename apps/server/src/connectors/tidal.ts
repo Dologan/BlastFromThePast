@@ -45,7 +45,8 @@ export class TidalConnector implements ServiceConnector {
       throw new ConnectorError(`TIDAL HTTP ${res.status} for ${method} ${path}: ${await res.text()}`, res.status);
     }
     if (res.status === 204) return undefined;
-    return res.json();
+    const text = await res.text();
+    return text ? JSON.parse(text) : undefined;
   }
 
   async searchTrack(query: TrackQuery): Promise<ServiceTrack[]> {

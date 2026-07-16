@@ -35,7 +35,8 @@ export async function authedJson(
     throw new ConnectorError(`HTTP ${res.status} for ${method} ${url}: ${await res.text()}`, res.status);
   }
   if (res.status === 204) return undefined;
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : undefined;
 }
 
 export function chunk<T>(items: T[], size: number): T[][] {

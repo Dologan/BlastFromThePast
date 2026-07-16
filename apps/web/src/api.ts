@@ -28,6 +28,8 @@ export interface PushResult {
   matchedCount: number;
   unmatched: UnmatchedTrack[];
   lowConfidence: UnmatchedTrack[];
+  matchError?: string;
+  itemsError?: string;
 }
 
 export interface PreviewRow {

@@ -13,6 +13,10 @@ class FakeConnector implements ServiceConnector {
   // Map normalized "artist|title" -> serviceId, or ISRC -> serviceId.
   byQuery = new Map<string, ServiceTrack>();
   byIsrc = new Map<string, ServiceTrack>();
+  /** When set, searchTrack throws for this exact artist|title instead of searching. */
+  failQuery: string | null = null;
+  /** When set, setPlaylistTracks throws this instead of succeeding. */
+  failSetTracks: string | null = null;
 
   async isAuthorized() {
     return true;
@@ -23,7 +27,9 @@ class FakeConnector implements ServiceConnector {
       const hit = this.byIsrc.get(q.isrc);
       return hit ? [hit] : [];
     }
-    const hit = this.byQuery.get(`${q.artistName.toLowerCase()}|${q.trackName.toLowerCase()}`);
+    const key = `${q.artistName.toLowerCase()}|${q.trackName.toLowerCase()}`;
+    if (this.failQuery && key === this.failQuery) throw new Error('search boom');
+    const hit = this.byQuery.get(key);
     return hit ? [hit] : [];
   }
   async createPlaylist(name: string) {
@@ -31,6 +37,7 @@ class FakeConnector implements ServiceConnector {
     return 'PL1';
   }
   async setPlaylistTracks(_id: string, ids: string[]) {
+    if (this.failSetTracks) throw new Error(this.failSetTracks);
     this.addedIds = ids;
   }
   deepLinkTrack(id: string) {
@@ -157,5 +164,42 @@ describe('pushPlaylist', () => {
     expect(result.matchedCount).toBe(0);
     expect(connector.addedIds).toEqual([]);
     expect(connector.createdName).toBe('Empty');
+  });
+
+  it('reports itemsError and logs nothing when adding matched tracks to the playlist fails', async () => {
+    const t1 = addTrack('Opeth', 'Windowpane');
+    connector.byQuery.set('opeth|windowpane', { serviceId: 'sp-1', name: 'Windowpane', artistName: 'Opeth' });
+    connector.failSetTracks = 'TIDAL HTTP 400 for POST /playlists/PL1/relationships/items: boom';
+
+    const result = await pushPlaylist(handle, connector, 'spotify', 'Broken Add', 'd', [
+      { trackId: t1, name: 'Windowpane', artistName: 'Opeth' },
+    ]);
+
+    // The playlist was created (real, empty), and we say so instead of leaving the caller with nothing.
+    expect(connector.createdName).toBe('Broken Add');
+    expect(result.itemsError).toContain('boom');
+    expect(result.matchedCount).toBe(0);
+    // Nothing was actually added to the real playlist, so nothing should be logged as "recently playlisted".
+    const logged = handle.sqlite.prepare('SELECT COUNT(*) c FROM playlist_log_tracks').get() as { c: number };
+    expect(logged.c).toBe(0);
+  });
+
+  it('keeps going and reports matchError when a single track search fails', async () => {
+    const t1 = addTrack('Opeth', 'Windowpane');
+    const t2 = addTrack('Katatonia', 'Lethean');
+    connector.byQuery.set('opeth|windowpane', { serviceId: 'sp-1', name: 'Windowpane', artistName: 'Opeth' });
+    connector.byQuery.set('katatonia|lethean', { serviceId: 'sp-2', name: 'Lethean', artistName: 'Katatonia' });
+    connector.failQuery = 'katatonia|lethean';
+
+    const result = await pushPlaylist(handle, connector, 'spotify', 'Partial', 'd', [
+      { trackId: t1, name: 'Windowpane', artistName: 'Opeth' },
+      { trackId: t2, name: 'Lethean', artistName: 'Katatonia' },
+    ]);
+
+    // t1 still matched and made it into the real playlist despite t2's search blowing up.
+    expect(connector.addedIds).toEqual(['sp-1']);
+    expect(result.matchedCount).toBe(1);
+    expect(result.unmatched.map((u) => u.name)).toEqual(['Lethean']);
+    expect(result.matchError).toContain('search boom');
   });
 });

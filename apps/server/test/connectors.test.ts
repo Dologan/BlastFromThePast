@@ -17,7 +17,12 @@ function recorder(responder: (url: string, method: string) => unknown): {
   const fetchImpl: ConnectorFetch = async (url, init) => {
     calls.push({ url, method: init.method, body: init.body });
     const body = responder(url, init.method);
-    return { ok: true, status: body === undefined ? 204 : 200, json: async () => body, text: async () => '' };
+    return {
+      ok: true,
+      status: body === undefined ? 204 : 200,
+      json: async () => body,
+      text: async () => (body === undefined ? '' : JSON.stringify(body)),
+    };
   };
   return { fetchImpl, calls };
 }
@@ -99,5 +104,20 @@ describe('TidalConnector', () => {
       { type: 'tracks', id: 't1' },
       { type: 'tracks', id: 't2' },
     ]);
+  });
+
+  it('does not choke on a 2xx response with an empty body', async () => {
+    // Some JSON:API writes return 200/201 with no body rather than 204 —
+    // calling res.json() unconditionally would throw on the empty string.
+    const fetchImpl: ConnectorFetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error('should not be called on an empty body');
+      },
+      text: async () => '',
+    });
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await expect(c.setPlaylistTracks('tpl1', ['t1'])).resolves.toBeUndefined();
   });
 });
