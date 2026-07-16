@@ -297,9 +297,18 @@ function formatDuration(seconds: number): string {
   return `${Math.round(days)} days`;
 }
 
+function EntityName({ name, artistName }: { name: string; artistName: string | null }) {
+  return (
+    <span className="insight-main">
+      <strong>{name}</strong> {artistName && <span className="hint">— {artistName}</span>}
+    </span>
+  );
+}
+
 function InsightsPanel() {
   const [kind, setKind] = useState<InsightKind>('tracks');
   const [days, setDays] = useState(90);
+  const [shuffleKey, setShuffleKey] = useState(0);
   const [data, setData] = useState<Insights | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -320,7 +329,7 @@ function InsightsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [kind, days]);
+  }, [kind, days, shuffleKey]);
 
   return (
     <section className="panel">
@@ -330,6 +339,7 @@ function InsightsPanel() {
           <select value={kind} onChange={(e) => setKind(e.target.value as InsightKind)}>
             <option value="tracks">Tracks</option>
             <option value="albums">Albums</option>
+            <option value="artists">Artists</option>
           </select>
           <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={30}>last 30 days</option>
@@ -344,36 +354,39 @@ function InsightsPanel() {
       {data && (
         <div className={loading ? 'dimmed' : undefined}>
           <h3>Longest gaps</h3>
-          <p className="hint">The longest you went without playing something — before coming back to it.</p>
+          <p className="hint">
+            Still going — the longest you've gone so far without playing something you used to play often.
+          </p>
           {data.gaps.length === 0 ? (
             <p className="hint">No gaps yet — sync some history first.</p>
           ) : (
             <ol className="insight-list">
               {data.gaps.map((g) => (
                 <li key={g.entityId}>
-                  <span className="insight-main">
-                    <strong>{g.name}</strong> <span className="hint">— {g.artistName}</span>
-                  </span>
+                  <EntityName name={g.name} artistName={g.artistName} />
                   <span className="hint">
-                    {formatDuration(g.gapSeconds)} · returned {new Date(g.gapEnd * 1000).toLocaleDateString()}
+                    silent for {formatDuration(g.gapSeconds)} · {g.playcount.toLocaleString()} plays before that
                   </span>
                 </li>
               ))}
             </ol>
           )}
-          <h3>Climbers</h3>
-          <p className="hint">Biggest jumps up your all-time ranking in the selected window.</p>
-          {data.climbers.length === 0 ? (
-            <p className="hint">Nothing climbed in this window.</p>
+          <div className="results-head">
+            <h3>Neglected</h3>
+            <button className="link" onClick={() => setShuffleKey((k) => k + 1)}>
+              shuffle
+            </button>
+          </div>
+          <p className="hint">A random sample of things gone quiet for a while — for when "the longest gap" gets predictable.</p>
+          {data.neglected.length === 0 ? (
+            <p className="hint">Nothing's been quiet long enough in this window yet.</p>
           ) : (
             <ol className="insight-list">
-              {data.climbers.map((c) => (
-                <li key={c.entityId}>
-                  <span className="insight-main">
-                    <strong>{c.name}</strong> <span className="hint">— {c.artistName}</span>
-                  </span>
+              {data.neglected.map((n) => (
+                <li key={n.entityId}>
+                  <EntityName name={n.name} artistName={n.artistName} />
                   <span className="hint">
-                    #{c.rankThen} → #{c.rankNow} <span className="climb">▲{c.climb}</span> · {c.playcount.toLocaleString()} plays
+                    last played {new Date(n.lastListen * 1000).toLocaleDateString()} · {n.playcount.toLocaleString()} plays
                   </span>
                 </li>
               ))}

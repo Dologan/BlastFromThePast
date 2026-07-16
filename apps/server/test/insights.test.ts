@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { openDb, type DbHandle } from '@bftp/db';
-import { computeGaps, computeClimbers } from '../src/stats/insights.js';
+import { computeGaps, computeNeglected } from '../src/stats/insights.js';
 import { rebuildStats } from '../src/sync/stats.js';
 import { buildApp } from '../src/app.js';
 
 const NOW = 1_800_000_000;
 const DAY = 86400;
 
-describe('insights: gaps & climbers', () => {
+describe('insights: gaps & neglected', () => {
   let handle: DbHandle;
   afterEach(() => handle.close());
 
@@ -38,26 +38,26 @@ describe('insights: gaps & climbers', () => {
     handle = openDb(':memory:');
   });
 
-  it('finds the widest bridged gap per track and ranks by it', () => {
+  it('ranks by the longest ongoing silence among things played more than once', () => {
     const a = mkArtist('Opeth');
-    // "Comeback": played, 2-year silence, played again — the biggest gap.
-    const comeback = mkTrack(a, 'Comeback');
-    scrobble(comeback, NOW - 900 * DAY);
-    scrobble(comeback, NOW - 170 * DAY); // 730-day gap
-    scrobble(comeback, NOW - 100 * DAY);
-    // "Steady": played weekly — tiny gaps.
+    // "Ghosted": played a lot, then nothing for 3 years — the biggest ongoing gap.
+    const ghosted = mkTrack(a, 'Ghosted');
+    scrobble(ghosted, NOW - 5 * 365 * DAY);
+    scrobble(ghosted, NOW - 5 * 365 * DAY + DAY);
+    scrobble(ghosted, NOW - 3 * 365 * DAY); // last play 3 years ago
+    // "Steady": played weekly, up to recently — tiny ongoing gap.
     const steady = mkTrack(a, 'Steady');
     for (let i = 0; i < 5; i++) scrobble(steady, NOW - i * 7 * DAY);
-    // "Once": a single play — no gap at all, must not appear.
+    // "Once": a single play — must not appear (needs playcount >= 2).
     const once = mkTrack(a, 'Once');
-    scrobble(once, NOW - 400 * DAY);
+    scrobble(once, NOW - 4 * 365 * DAY);
     rebuildStats(handle.sqlite);
 
-    const gaps = computeGaps(handle.sqlite, 'tracks');
-    expect(gaps[0]!.name).toBe('Comeback');
-    expect(Math.round(gaps[0]!.gapSeconds / DAY)).toBe(730);
-    expect(gaps[0]!.gapEnd).toBe(NOW - 170 * DAY);
+    const gaps = computeGaps(handle.sqlite, 'tracks', 15, NOW);
+    expect(gaps[0]!.name).toBe('Ghosted');
+    expect(Math.round(gaps[0]!.gapSeconds / DAY / 365)).toBe(3);
     expect(gaps.map((g) => g.name)).not.toContain('Once');
+    expect(gaps.map((g) => g.name)).toContain('Steady');
   });
 
   it('computes album gaps from album-linked scrobbles only', () => {
@@ -65,62 +65,63 @@ describe('insights: gaps & climbers', () => {
     const alb = mkAlbum(a, 'Ghost Reveries');
     const t = mkTrack(a, 'Ghost of Perdition');
     scrobble(t, NOW - 500 * DAY, alb);
-    scrobble(t, NOW - 10 * DAY, alb);
+    scrobble(t, NOW - 400 * DAY, alb);
     const loose = mkTrack(a, 'No Album Track');
     scrobble(loose, NOW - 800 * DAY);
-    scrobble(loose, NOW - DAY);
+    scrobble(loose, NOW - 700 * DAY);
     rebuildStats(handle.sqlite);
 
-    const gaps = computeGaps(handle.sqlite, 'albums');
+    const gaps = computeGaps(handle.sqlite, 'albums', 15, NOW);
     expect(gaps).toHaveLength(1);
     expect(gaps[0]!.name).toBe('Ghost Reveries');
-    expect(Math.round(gaps[0]!.gapSeconds / DAY)).toBe(490);
+    expect(Math.round(gaps[0]!.gapSeconds / DAY)).toBe(400);
   });
 
-  it('ranks climbers by places gained in the window, ignoring new arrivals', () => {
-    const a = mkArtist('Various');
-    // Old favourite: 10 old plays, none recent (should not climb).
-    const fav = mkTrack(a, 'Old Favourite');
-    for (let i = 0; i < 10; i++) scrobble(fav, NOW - 400 * DAY + i * DAY);
-    // Rediscovered: 2 old plays, 6 recent — jumps over the middle one.
-    const redis = mkTrack(a, 'Rediscovered');
-    scrobble(redis, NOW - 500 * DAY);
-    scrobble(redis, NOW - 450 * DAY);
-    for (let i = 0; i < 6; i++) scrobble(redis, NOW - 10 * DAY + i * 3600);
-    // Middle: 4 old plays, none recent.
-    const mid = mkTrack(a, 'Middle');
-    for (let i = 0; i < 4; i++) scrobble(mid, NOW - 300 * DAY + i * DAY);
-    // Brand new: first played inside the window — excluded by design.
-    const brandNew = mkTrack(a, 'Brand New');
-    for (let i = 0; i < 3; i++) scrobble(brandNew, NOW - 5 * DAY + i * 3600);
+  it('supports the artists kind, with a null artistName', () => {
+    const a = mkArtist('Opeth');
+    const t = mkTrack(a, 'Harvest');
+    scrobble(t, NOW - 400 * DAY);
+    scrobble(t, NOW - 300 * DAY);
     rebuildStats(handle.sqlite);
 
-    const climbers = computeClimbers(handle.sqlite, 'tracks', 90, 15, NOW);
-    expect(climbers.map((c) => c.name)).toEqual(['Rediscovered']);
-    // Then: fav(10)=1, mid(4)=2, redis(2)=3. Now: fav(10)=1, redis(8)=2,
-    // mid(4)=3, new(3)=4 — redis climbed 3→2.
-    expect(climbers[0]!.rankThen).toBe(3);
-    expect(climbers[0]!.rankNow).toBe(2);
-    expect(climbers[0]!.climb).toBe(1);
+    const gaps = computeGaps(handle.sqlite, 'artists', 15, NOW);
+    expect(gaps[0]!.name).toBe('Opeth');
+    expect(gaps[0]!.artistName).toBeNull();
   });
 
-  it('is served by /api/library/insights', async () => {
+  it('neglected samples items silent for at least the given window, ignoring recent ones', () => {
+    const a = mkArtist('Opeth');
+    const stale = mkTrack(a, 'Stale');
+    scrobble(stale, NOW - 200 * DAY);
+    const fresh = mkTrack(a, 'Fresh');
+    scrobble(fresh, NOW - 5 * DAY);
+    rebuildStats(handle.sqlite);
+
+    const neglected = computeNeglected(handle.sqlite, 'tracks', 90, 15, NOW);
+    expect(neglected.map((n) => n.name)).toEqual(['Stale']);
+  });
+
+  it('is served by /api/library/insights, including the artists kind', async () => {
     const a = mkArtist('Opeth');
     const t = mkTrack(a, 'Harvest');
     scrobble(t, NOW - 300 * DAY);
-    scrobble(t, NOW - 10 * DAY);
+    scrobble(t, NOW - 200 * DAY);
     rebuildStats(handle.sqlite);
 
     const app = buildApp({ handle });
-    const res = await app.inject({ method: 'GET', url: '/api/library/insights?kind=tracks&days=30' });
+    const res = await app.inject({ method: 'GET', url: '/api/library/insights?kind=tracks&days=365' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.kind).toBe('tracks');
-    expect(body.days).toBe(30);
+    expect(body.days).toBe(365);
     expect(body.gaps[0].name).toBe('Harvest');
-    expect(Array.isArray(body.climbers)).toBe(true);
+    expect(Array.isArray(body.neglected)).toBe(true);
 
-    const bad = await app.inject({ method: 'GET', url: '/api/library/insights?kind=artists' });
+    const artists = await app.inject({ method: 'GET', url: '/api/library/insights?kind=artists' });
+    expect(artists.statusCode).toBe(200);
+    expect(artists.json().kind).toBe('artists');
+
+    const bad = await app.inject({ method: 'GET', url: '/api/library/insights?kind=songs' });
     expect(bad.statusCode).toBe(400);
     await app.close();
   });

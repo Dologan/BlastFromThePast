@@ -17,7 +17,7 @@ import { pushPlaylist, type PushResult } from './match/push.js';
 import { ServiceMatcher } from './match/matcher.js';
 import { importSpotifyLiked } from './sync/spotifyLiked.js';
 import { getSetting, getStoredSetting, setSetting, SETTING_KEYS } from './settings.js';
-import { computeGaps, computeClimbers, type InsightKind } from './stats/insights.js';
+import { computeGaps, computeNeglected, type InsightKind } from './stats/insights.js';
 import { PRESETS, type Recipe, type ServiceConnector, type ServiceName } from '@bftp/core';
 import path from 'node:path';
 
@@ -217,16 +217,16 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   app.get('/api/library/insights', async (req, reply) => {
     const q = req.query as { kind?: string; days?: string };
-    const kind: InsightKind = q.kind === 'albums' ? 'albums' : 'tracks';
-    const days = Math.max(1, Number(q.days) || 90);
-    if (q.kind && q.kind !== 'tracks' && q.kind !== 'albums') {
-      return reply.code(400).send({ error: 'kind must be tracks or albums.' });
+    if (q.kind && q.kind !== 'tracks' && q.kind !== 'albums' && q.kind !== 'artists') {
+      return reply.code(400).send({ error: 'kind must be tracks, albums or artists.' });
     }
+    const kind: InsightKind = (q.kind as InsightKind) ?? 'tracks';
+    const days = Math.max(1, Number(q.days) || 90);
     return {
       kind,
       days,
       gaps: computeGaps(handle.sqlite, kind),
-      climbers: computeClimbers(handle.sqlite, kind, days),
+      neglected: computeNeglected(handle.sqlite, kind, days),
     };
   });
 

@@ -124,33 +124,32 @@ export interface NamedWeight {
   weight: number;
 }
 
-export type InsightKind = 'tracks' | 'albums';
+export type InsightKind = 'tracks' | 'albums' | 'artists';
 
 export interface GapRow {
   entityId: number;
   name: string;
-  artistName: string;
+  /** Null for the 'artists' kind, where the entity itself is the artist. */
+  artistName: string | null;
   playcount: number;
+  lastListen: number;
+  /** How long it's been silent so far — an open-ended, still-running gap. */
   gapSeconds: number;
-  gapStart: number;
-  gapEnd: number;
 }
 
-export interface ClimberRow {
+export interface NeglectedRow {
   entityId: number;
   name: string;
-  artistName: string;
+  artistName: string | null;
   playcount: number;
-  rankNow: number;
-  rankThen: number;
-  climb: number;
+  lastListen: number;
 }
 
 export interface Insights {
   kind: InsightKind;
   days: number;
   gaps: GapRow[];
-  climbers: ClimberRow[];
+  neglected: NeglectedRow[];
 }
 
 export interface LibrarySummary {
