@@ -301,6 +301,25 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       )
       .all(albumId) as { trackId: number; name: string; artistName: string }[];
 
+  /** Most recent push of this name to this service, if any -- lets the UI ask
+   * "replace or add to it?" instead of silently duplicating a playlist. */
+  app.get('/api/push/existing', async (req, reply) => {
+    const q = req.query as { service?: string; name?: string };
+    const service = q.service ? parseService(q.service) : null;
+    if (!service || !q.name?.trim()) return reply.code(400).send({ error: 'service and name are required.' });
+    const row = handle.sqlite
+      .prepare(
+        `SELECT service_playlist_id AS playlistId, created_at AS createdAt FROM playlist_log
+         WHERE service = ? AND name = ? ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(service, q.name.trim()) as { playlistId: string; createdAt: number } | undefined;
+    if (!row) return { existing: null };
+    const connector = makeConnector(service);
+    return {
+      existing: { playlistId: row.playlistId, playlistUrl: connector.deepLinkPlaylist(row.playlistId), createdAt: row.createdAt },
+    };
+  });
+
   app.post('/api/push', async (req, reply) => {
     const body = req.body as {
       recipe?: Recipe;
@@ -309,6 +328,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       description?: string;
       /** Optional subset of preview entity ids (tracks or albums, per mode). */
       selectedIds?: number[];
+      mode?: 'new' | 'replace' | 'append';
+      existingPlaylistId?: string;
     };
     const service = body.service ? parseService(body.service) : null;
     if (!service) return reply.code(400).send({ error: 'A valid service is required.' });
@@ -329,10 +350,17 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const connector = makeConnector(service);
     const name = body.name.trim();
     const description = body.description ?? 'Created by Blast From The Past';
+    const mode = body.mode ?? 'new';
+    if (mode !== 'new' && !body.existingPlaylistId) {
+      return reply.code(400).send({ error: 'existingPlaylistId is required for replace/append.' });
+    }
 
     lastPush = null;
     const started = jobs.start('push', async () => {
-      lastPush = await pushPlaylist(handle, connector, service, name, description, tracks, jobs.reportProgress);
+      lastPush = await pushPlaylist(handle, connector, service, name, description, tracks, jobs.reportProgress, {
+        mode,
+        existingPlaylistId: body.existingPlaylistId,
+      });
     });
     if (!started) return reply.code(409).send({ error: 'A job is already running.' });
     return reply.code(202).send({ started: true, trackCount: tracks.length });

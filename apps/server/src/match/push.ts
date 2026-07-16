@@ -33,15 +33,23 @@ export interface PushResult {
   matchError?: string;
   /** Set if the playlist was created but adding the matched tracks to it failed. */
   itemsError?: string;
+  /** Append mode only: matched tracks already present in the target playlist, left alone. */
+  skippedDuplicates?: number;
+}
+
+export interface PushOptions {
+  /** 'new' (default) always creates a fresh playlist; 'replace'/'append' target `existingPlaylistId`. */
+  mode?: 'new' | 'replace' | 'append';
+  existingPlaylistId?: string;
 }
 
 const LOW_CONFIDENCE = 0.6;
 
 /**
- * Matches a list of library tracks to a service, creates a playlist, adds the
- * matched tracks, and records the push in playlist_log (so recipes can later
- * exclude recently-playlisted tracks). Unmatched and low-confidence tracks are
- * reported back rather than silently dropped.
+ * Matches a list of library tracks to a service, creates (or reuses) a
+ * playlist, adds the matched tracks, and records the push in playlist_log
+ * (so recipes can later exclude recently-playlisted tracks). Unmatched and
+ * low-confidence tracks are reported back rather than silently dropped.
  */
 export async function pushPlaylist(
   handle: DbHandle,
@@ -51,6 +59,7 @@ export async function pushPlaylist(
   description: string,
   tracks: PushTrack[],
   onProgress: (p: PushProgress) => void = () => {},
+  opts: PushOptions = {},
 ): Promise<PushResult> {
   const matcher = new ServiceMatcher(handle, connector, service);
   const matchedIds: string[] = [];
@@ -83,9 +92,38 @@ export async function pushPlaylist(
     onProgress({ kind: 'push', matched: matchedIds.length, processed, total: tracks.length });
   }
 
-  const playlistId = await connector.createPlaylist(name, description);
+  const mode = opts.mode ?? 'new';
+  let playlistId: string;
+  let skippedDuplicates = 0;
+  if (mode !== 'new' && opts.existingPlaylistId) {
+    playlistId = opts.existingPlaylistId;
+    if (mode === 'replace') {
+      // Connectors whose setPlaylistTracks only appends (TIDAL) need an
+      // explicit clear first; ones that already fully replace (Spotify)
+      // don't implement clearPlaylist at all.
+      await connector.clearPlaylist?.(playlistId);
+    } else if (connector.getPlaylistTrackIds) {
+      const existing = new Set(await connector.getPlaylistTrackIds(playlistId));
+      const kept: { id: string; trackId: number }[] = [];
+      for (let i = 0; i < matchedIds.length; i++) {
+        if (existing.has(matchedIds[i]!)) skippedDuplicates++;
+        else kept.push({ id: matchedIds[i]!, trackId: matchedTrackIds[i]! });
+      }
+      matchedIds.length = 0;
+      matchedTrackIds.length = 0;
+      for (const k of kept) {
+        matchedIds.push(k.id);
+        matchedTrackIds.push(k.trackId);
+      }
+    }
+  } else {
+    playlistId = await connector.createPlaylist(name, description);
+  }
+
   let itemsError: string | undefined;
-  if (matchedIds.length > 0) {
+  // A replace always calls through (even with zero matches, to actually
+  // empty the playlist); an append/new only bothers when there's something to add.
+  if (matchedIds.length > 0 || mode === 'replace') {
     try {
       await connector.setPlaylistTracks(playlistId, matchedIds);
     } catch (err) {
@@ -121,5 +159,6 @@ export async function pushPlaylist(
     lowConfidence,
     ...(matchError ? { matchError } : {}),
     ...(itemsError ? { itemsError } : {}),
+    ...(mode === 'append' ? { skippedDuplicates } : {}),
   };
 }

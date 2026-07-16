@@ -77,6 +77,26 @@ describe('SpotifyConnector', () => {
     const c = new SpotifyConnector(token, () => true);
     expect(c.deepLinkPlaylist('pl1')).toBe('https://open.spotify.com/playlist/pl1');
   });
+
+  it('getPlaylistTrackIds paginates via next', async () => {
+    let page = 0;
+    const { fetchImpl } = recorder(() => {
+      page++;
+      if (page === 1) return { items: [{ track: { id: 's1' } }], next: 'https://api.spotify.com/v1/playlists/pl1/tracks?offset=100' };
+      return { items: [{ track: { id: 's2' } }], next: null };
+    });
+    const c = new SpotifyConnector(token, () => true, fetchImpl);
+    expect(await c.getPlaylistTrackIds('pl1')).toEqual(['s1', 's2']);
+  });
+
+  it('setPlaylistTracks with an empty list still issues one PUT, to actually clear the playlist', async () => {
+    const { fetchImpl, calls } = recorder(() => ({}));
+    const c = new SpotifyConnector(token, () => true, fetchImpl);
+    await c.setPlaylistTracks('pl1', []);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('PUT');
+    expect(JSON.parse(calls[0]!.body!).uris).toEqual([]);
+  });
 });
 
 describe('TidalConnector', () => {
@@ -119,5 +139,45 @@ describe('TidalConnector', () => {
     });
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
     await expect(c.setPlaylistTracks('tpl1', ['t1'])).resolves.toBeUndefined();
+  });
+
+  it('setPlaylistTracks with an empty list makes no HTTP call', async () => {
+    const { fetchImpl, calls } = recorder(() => ({}));
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.setPlaylistTracks('tpl1', []);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('getPlaylistTrackIds paginates via page[cursor]', async () => {
+    const { fetchImpl } = recorder((url) => {
+      if (url.includes('page[cursor]=CURSOR1')) return { data: [{ id: 't3', type: 'tracks' }] };
+      return {
+        data: [{ id: 't1', type: 'tracks' }, { id: 't2', type: 'tracks' }],
+        links: { meta: { nextCursor: 'CURSOR1' } },
+      };
+    });
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    expect(await c.getPlaylistTrackIds('tpl1')).toEqual(['t1', 't2', 't3']);
+  });
+
+  it('clearPlaylist fetches existing items then DELETEs them', async () => {
+    const { fetchImpl, calls } = recorder((_url, method) => {
+      if (method === 'DELETE') return undefined; // 204
+      return { data: [{ id: 't1', type: 'tracks' }, { id: 't2', type: 'tracks' }] };
+    });
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.clearPlaylist('tpl1');
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(JSON.parse(del.body!).data).toEqual([
+      { type: 'tracks', id: 't1' },
+      { type: 'tracks', id: 't2' },
+    ]);
+  });
+
+  it('clearPlaylist makes no DELETE call when the playlist is already empty', async () => {
+    const { fetchImpl, calls } = recorder(() => ({ data: [] }));
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.clearPlaylist('tpl1');
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 });

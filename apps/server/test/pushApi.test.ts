@@ -11,6 +11,7 @@ const YEAR = 365 * 86400;
 class FakeConnector implements ServiceConnector {
   readonly service = 'spotify' as const;
   added: string[] = [];
+  createCalls = 0;
   async isAuthorized() {
     return true;
   }
@@ -19,10 +20,14 @@ class FakeConnector implements ServiceConnector {
     return [];
   }
   async createPlaylist() {
+    this.createCalls++;
     return 'PL9';
   }
   async setPlaylistTracks(_id: string, ids: string[]) {
     this.added = ids;
+  }
+  async getPlaylistTrackIds(_id: string): Promise<string[]> {
+    return [];
   }
   deepLinkTrack(id: string) {
     return `https://open.spotify.com/track/${id}`;
@@ -190,6 +195,111 @@ describe('push API', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/Nothing selected/);
+    await app.close();
+  });
+
+  it('reports no existing playlist before any push, and the last one after', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const opeth = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const t1 = Number(s.prepare("INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, 'Ghost of Perdition','ghost of perdition')").run(opeth).lastInsertRowid);
+    s.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(t1, NOW - YEAR);
+    rebuildStats(s);
+
+    const app = buildApp({
+      handle,
+      authManager: { isAuthorized: () => true } as unknown as AuthManager,
+      createConnector: () => new FakeConnector(),
+    });
+
+    const before = await app.inject({ method: 'GET', url: '/api/push/existing?service=spotify&name=Reused' });
+    expect(before.json().existing).toBeNull();
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/push',
+      payload: {
+        service: 'spotify',
+        name: 'Reused',
+        recipe: { filters: [], output: { mode: 'tracks', sort: 'neglect', limit: 10 } },
+      },
+    });
+    for (let i = 0; i < 50; i++) {
+      const st = await app.inject({ method: 'GET', url: '/api/sync/status' });
+      if (!st.json().running) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const after = await app.inject({ method: 'GET', url: '/api/push/existing?service=spotify&name=Reused' });
+    expect(after.json().existing.playlistId).toBe('PL9');
+    expect(after.json().existing.playlistUrl).toBe('https://open.spotify.com/playlist/PL9');
+    await app.close();
+  });
+
+  it('replace/append modes reuse the existing playlist id instead of creating a new one', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const opeth = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const t1 = Number(s.prepare("INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, 'Ghost of Perdition','ghost of perdition')").run(opeth).lastInsertRowid);
+    s.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(t1, NOW - YEAR);
+    rebuildStats(s);
+
+    const connector = new FakeConnector();
+    const app = buildApp({
+      handle,
+      authManager: { isAuthorized: () => true } as unknown as AuthManager,
+      createConnector: () => connector,
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/push',
+      payload: {
+        service: 'spotify',
+        name: 'Reused',
+        recipe: { filters: [], output: { mode: 'tracks', sort: 'neglect', limit: 10 } },
+        mode: 'append',
+        existingPlaylistId: 'PL_OLD',
+      },
+    });
+    expect(res.statusCode).toBe(202);
+    for (let i = 0; i < 50; i++) {
+      const st = await app.inject({ method: 'GET', url: '/api/sync/status' });
+      if (!st.json().running) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(connector.createCalls).toBe(0);
+    const { result } = (await app.inject({ method: 'GET', url: '/api/push/result' })).json();
+    expect(result.playlistId).toBe('PL_OLD');
+    await app.close();
+  });
+
+  it('rejects replace/append without an existingPlaylistId', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const opeth = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const t1 = Number(s.prepare("INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, 'Ghost of Perdition','ghost of perdition')").run(opeth).lastInsertRowid);
+    s.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(t1, NOW - YEAR);
+    rebuildStats(s);
+
+    const app = buildApp({
+      handle,
+      authManager: { isAuthorized: () => true } as unknown as AuthManager,
+      createConnector: () => new FakeConnector(),
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/push',
+      payload: {
+        service: 'spotify',
+        name: 'x',
+        recipe: { filters: [], output: { mode: 'tracks', sort: 'neglect', limit: 10 } },
+        mode: 'replace',
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/existingPlaylistId/);
     await app.close();
   });
 });

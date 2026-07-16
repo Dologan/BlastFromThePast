@@ -30,6 +30,15 @@ export interface PushResult {
   lowConfidence: UnmatchedTrack[];
   matchError?: string;
   itemsError?: string;
+  skippedDuplicates?: number;
+}
+
+export type PushMode = 'new' | 'replace' | 'append';
+
+export interface ExistingPlaylist {
+  playlistId: string;
+  playlistUrl: string;
+  createdAt: number;
 }
 
 export interface PreviewRow {
@@ -232,13 +241,24 @@ export const api = {
     request<void>(`/api/auth/${service}/disconnect`, { method: 'POST' }),
   importSpotifyLiked: () => request<{ started: boolean }>('/api/sync/spotify-liked', { method: 'POST' }),
 
-  push: (recipe: Recipe, service: ServiceName, name: string, selectedIds?: number[]) =>
+  push: (
+    recipe: Recipe,
+    service: ServiceName,
+    name: string,
+    selectedIds?: number[],
+    mode?: PushMode,
+    existingPlaylistId?: string,
+  ) =>
     request<{ started: boolean; trackCount: number }>('/api/push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipe, service, name, selectedIds }),
+      body: JSON.stringify({ recipe, service, name, selectedIds, mode, existingPlaylistId }),
     }),
   getPushResult: () => request<{ result: PushResult | null }>('/api/push/result'),
+  checkExistingPlaylist: (service: ServiceName, name: string) =>
+    request<{ existing: ExistingPlaylist | null }>(
+      `/api/push/existing?service=${service}&name=${encodeURIComponent(name)}`,
+    ),
 
   getPresets: () => request<Preset[]>('/api/presets'),
   getCandidates: (service: ServiceName, trackId: number) =>

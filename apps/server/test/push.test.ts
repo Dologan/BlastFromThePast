@@ -17,6 +17,9 @@ class FakeConnector implements ServiceConnector {
   failQuery: string | null = null;
   /** When set, setPlaylistTracks throws this instead of succeeding. */
   failSetTracks: string | null = null;
+  /** Simulated tracks already in the target playlist, for append-mode de-dup. */
+  existingTrackIds: string[] | null = null;
+  cleared = false;
 
   async isAuthorized() {
     return true;
@@ -39,6 +42,13 @@ class FakeConnector implements ServiceConnector {
   async setPlaylistTracks(_id: string, ids: string[]) {
     if (this.failSetTracks) throw new Error(this.failSetTracks);
     this.addedIds = ids;
+  }
+  async getPlaylistTrackIds(_id: string): Promise<string[]> {
+    return this.existingTrackIds ?? [];
+  }
+  async clearPlaylist(_id: string): Promise<void> {
+    this.cleared = true;
+    this.addedIds = [];
   }
   deepLinkTrack(id: string) {
     return `https://open.spotify.com/track/${id}`;
@@ -201,5 +211,75 @@ describe('pushPlaylist', () => {
     expect(result.matchedCount).toBe(1);
     expect(result.unmatched.map((u) => u.name)).toEqual(['Lethean']);
     expect(result.matchError).toContain('search boom');
+  });
+
+  it('replace mode reuses the existing playlist id, clears it, and never calls createPlaylist', async () => {
+    const t1 = addTrack('Opeth', 'Windowpane');
+    connector.byQuery.set('opeth|windowpane', { serviceId: 'sp-1', name: 'Windowpane', artistName: 'Opeth' });
+
+    const result = await pushPlaylist(
+      handle,
+      connector,
+      'spotify',
+      'Existing',
+      'd',
+      [{ trackId: t1, name: 'Windowpane', artistName: 'Opeth' }],
+      undefined,
+      { mode: 'replace', existingPlaylistId: 'PL_OLD' },
+    );
+
+    expect(connector.createdName).toBeNull(); // reused, not created
+    expect(connector.cleared).toBe(true);
+    expect(connector.addedIds).toEqual(['sp-1']);
+    expect(result.playlistId).toBe('PL_OLD');
+    expect(result.matchedCount).toBe(1);
+  });
+
+  it('replace mode still clears the playlist when nothing matches this time', async () => {
+    const t1 = addTrack('Nobody', 'Unfindable');
+    const result = await pushPlaylist(
+      handle,
+      connector,
+      'spotify',
+      'Existing',
+      'd',
+      [{ trackId: t1, name: 'Unfindable', artistName: 'Nobody' }],
+      undefined,
+      { mode: 'replace', existingPlaylistId: 'PL_OLD' },
+    );
+    expect(connector.cleared).toBe(true);
+    expect(result.matchedCount).toBe(0);
+  });
+
+  it('append mode skips tracks already in the playlist and reports how many were skipped', async () => {
+    const t1 = addTrack('Opeth', 'Windowpane');
+    const t2 = addTrack('Katatonia', 'Lethean');
+    connector.byQuery.set('opeth|windowpane', { serviceId: 'sp-1', name: 'Windowpane', artistName: 'Opeth' });
+    connector.byQuery.set('katatonia|lethean', { serviceId: 'sp-2', name: 'Lethean', artistName: 'Katatonia' });
+    connector.existingTrackIds = ['sp-1']; // already in the playlist
+
+    const result = await pushPlaylist(
+      handle,
+      connector,
+      'spotify',
+      'Existing',
+      'd',
+      [
+        { trackId: t1, name: 'Windowpane', artistName: 'Opeth' },
+        { trackId: t2, name: 'Lethean', artistName: 'Katatonia' },
+      ],
+      undefined,
+      { mode: 'append', existingPlaylistId: 'PL_OLD' },
+    );
+
+    expect(connector.createdName).toBeNull();
+    expect(connector.cleared).toBe(false);
+    expect(connector.addedIds).toEqual(['sp-2']); // only the new one goes out over the wire
+    expect(result.matchedCount).toBe(1);
+    expect(result.skippedDuplicates).toBe(1);
+
+    // Only the newly-added track is logged as "recently playlisted".
+    const logged = handle.sqlite.prepare('SELECT track_id FROM playlist_log_tracks').all() as { track_id: number }[];
+    expect(logged.map((r) => r.track_id)).toEqual([t2]);
   });
 });

@@ -467,6 +467,25 @@ input[type='range'] {
   flex-wrap: wrap;
 }
 
+.conflict-box {
+  background: var(--accent-soft);
+  border: 1px solid light-dark(#ded7f8, #38304d);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  margin: 0.5rem 0;
+}
+
+.conflict-box p {
+  margin: 0 0 0.6rem;
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .results {
   list-style: none;
   padding: 0;

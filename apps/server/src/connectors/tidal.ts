@@ -82,8 +82,36 @@ export class TidalConnector implements ServiceConnector {
   }
 
   async setPlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
+    if (serviceTrackIds.length === 0) return;
     await this.request('POST', `/playlists/${playlistId}/relationships/items`, {
       data: serviceTrackIds.map((id) => ({ type: 'tracks', id })),
+    });
+  }
+
+  /** Track ids currently in the playlist, for append-mode de-duplication. */
+  async getPlaylistTrackIds(playlistId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const path = `/playlists/${playlistId}/relationships/items${cursor ? `?page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
+      const data = await this.request('GET', path);
+      for (const item of data?.data ?? []) {
+        if (item?.id) ids.push(String(item.id));
+      }
+      const next = data?.links?.meta?.nextCursor;
+      if (!next) break;
+      cursor = next;
+    }
+    return ids;
+  }
+
+  /** Empties a playlist -- TIDAL's item-add endpoint only appends, so a "replace"
+   * push needs this before setPlaylistTracks. */
+  async clearPlaylist(playlistId: string): Promise<void> {
+    const ids = await this.getPlaylistTrackIds(playlistId);
+    if (ids.length === 0) return;
+    await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
+      data: ids.map((id) => ({ type: 'tracks', id })),
     });
   }
 

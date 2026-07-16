@@ -49,9 +49,13 @@ export class SpotifyConnector implements ServiceConnector {
 
   async setPlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
     const uris = serviceTrackIds.map((id) => `spotify:track:${id}`);
-    // First batch replaces, subsequent batches append (so >100 tracks work).
+    // First batch replaces (PUT), subsequent batches append (POST) so >100
+    // tracks work; an empty list still issues one PUT since that's how the
+    // Spotify API empties a playlist (a "replace" push may have zero matches).
+    const batches = chunk(uris, MAX_TRACKS_PER_REQUEST);
+    if (batches.length === 0) batches.push([]);
     let first = true;
-    for (const batch of chunk(uris, MAX_TRACKS_PER_REQUEST)) {
+    for (const batch of batches) {
       await authedJson(
         this.fetchImpl,
         this.getToken,
@@ -61,6 +65,20 @@ export class SpotifyConnector implements ServiceConnector {
       );
       first = false;
     }
+  }
+
+  /** Track ids currently in the playlist, for append-mode de-duplication. */
+  async getPlaylistTrackIds(playlistId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let url: string | null = `${API}/playlists/${playlistId}/tracks?fields=items(track(id)),next&limit=100`;
+    while (url) {
+      const data = await authedJson(this.fetchImpl, this.getToken, 'GET', url);
+      for (const item of data?.items ?? []) {
+        if (item?.track?.id) ids.push(String(item.track.id));
+      }
+      url = data?.next ?? null;
+    }
+    return ids;
   }
 
   async *getLikedTracks(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }> {

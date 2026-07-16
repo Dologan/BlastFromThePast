@@ -3,9 +3,11 @@ import {
   api,
   type AuthStatus,
   type Candidate,
+  type ExistingPlaylist,
   type Facets,
   type Preset,
   type PreviewResult,
+  type PushMode,
   type PushResult,
   type SavedRecipe,
   type ServiceName,
@@ -505,6 +507,7 @@ export default function RecipeBuilder() {
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [fixed, setFixed] = useState<Set<number>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [conflict, setConflict] = useState<{ service: ServiceName; existing: ExistingPlaylist } | null>(null);
 
   const recipe: Recipe = useMemo(
     () => ({ filters: Object.values(enabled).filter(isMeaningful), output }),
@@ -533,18 +536,20 @@ export default function RecipeBuilder() {
     setCurrentId(null); // a preset is a starting point, not a saved recipe
   };
 
-  const pushTo = async (service: ServiceName) => {
-    if (selected.size === 0) {
-      setPushMsg('Nothing selected — tick at least one result.');
-      return;
-    }
+  const doPush = async (service: ServiceName, mode: PushMode, existingPlaylistId?: string) => {
     const playlistName = name.trim() || 'Blast From The Past';
     setPushing(service);
     setPushResult(null);
     setFixed(new Set());
-    setPushMsg(`Pushing to ${service}…`);
+    setPushMsg(
+      mode === 'replace'
+        ? `Replacing "${playlistName}" on ${service}…`
+        : mode === 'append'
+          ? `Adding to "${playlistName}" on ${service}…`
+          : `Pushing to ${service}…`,
+    );
     try {
-      await api.push(recipe, service, playlistName, [...selected]);
+      await api.push(recipe, service, playlistName, [...selected], mode, existingPlaylistId);
       // Poll until the background push job finishes, then read its result.
       let lastStatus = await api.getSyncStatus();
       for (let i = 0; i < 200 && lastStatus.running; i++) {
@@ -559,6 +564,8 @@ export default function RecipeBuilder() {
         setPushMsg(`Some tracks couldn't be searched for: ${result.matchError}`);
       } else if (!result) {
         setPushMsg(lastStatus.error ? `Push failed: ${lastStatus.error}` : 'Push finished but returned no result.');
+      } else if (result.skippedDuplicates) {
+        setPushMsg(`${result.skippedDuplicates} track${result.skippedDuplicates === 1 ? '' : 's'} already in the playlist, left alone.`);
       } else {
         setPushMsg(null);
       }
@@ -567,6 +574,25 @@ export default function RecipeBuilder() {
     } finally {
       setPushing(null);
     }
+  };
+
+  const pushTo = async (service: ServiceName) => {
+    if (selected.size === 0) {
+      setPushMsg('Nothing selected — tick at least one result.');
+      return;
+    }
+    const playlistName = name.trim() || 'Blast From The Past';
+    setPushMsg(null);
+    try {
+      const { existing } = await api.checkExistingPlaylist(service, playlistName);
+      if (existing) {
+        setConflict({ service, existing });
+        return;
+      }
+    } catch {
+      // If the existence check fails, fall through to a normal push rather than blocking the user.
+    }
+    await doPush(service, 'new');
   };
 
   // Debounced live preview. Fresh results start fully selected.
@@ -790,12 +816,12 @@ export default function RecipeBuilder() {
                 : 'Push the selected albums (all their tracks) as a playlist:'}
             </span>
             {auth.spotify.connected && (
-              <button className="secondary" disabled={pushing !== null || selected.size === 0} onClick={() => pushTo('spotify')}>
+              <button className="secondary" disabled={pushing !== null || conflict !== null || selected.size === 0} onClick={() => pushTo('spotify')}>
                 {pushing === 'spotify' ? 'Pushing…' : 'Spotify'}
               </button>
             )}
             {auth.tidal.connected && (
-              <button className="secondary" disabled={pushing !== null || selected.size === 0} onClick={() => pushTo('tidal')}>
+              <button className="secondary" disabled={pushing !== null || conflict !== null || selected.size === 0} onClick={() => pushTo('tidal')}>
                 {pushing === 'tidal' ? 'Pushing…' : 'TIDAL'}
               </button>
             )}
@@ -804,10 +830,55 @@ export default function RecipeBuilder() {
         {auth && !auth.spotify.connected && !auth.tidal.connected && (
           <p className="hint">Connect Spotify or TIDAL on the Dashboard to push playlists.</p>
         )}
+        {conflict && (
+          <div className="conflict-box">
+            <p className="hint">
+              A playlist named "{name.trim() || 'Blast From The Past'}" already exists on {conflict.service} (pushed{' '}
+              {new Date(conflict.existing.createdAt * 1000).toLocaleDateString()}).{' '}
+              <a href={conflict.existing.playlistUrl} target="_blank" rel="noreferrer">
+                open it
+              </a>
+              . Replace its contents, add the selection to it, or make a new one anyway?
+            </p>
+            <div className="conflict-actions">
+              <button
+                onClick={() => {
+                  const { service, existing } = conflict;
+                  setConflict(null);
+                  void doPush(service, 'replace', existing.playlistId);
+                }}
+              >
+                Replace
+              </button>
+              <button
+                onClick={() => {
+                  const { service, existing } = conflict;
+                  setConflict(null);
+                  void doPush(service, 'append', existing.playlistId);
+                }}
+              >
+                Add to it
+              </button>
+              <button
+                className="secondary"
+                onClick={() => {
+                  const { service } = conflict;
+                  setConflict(null);
+                  void doPush(service, 'new');
+                }}
+              >
+                Create new anyway
+              </button>
+              <button className="link" onClick={() => setConflict(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {pushMsg && <p className="hint">{pushMsg}</p>}
         {pushResult && (
           <p className="hint">
-            Created playlist with {pushResult.matchedCount} track{pushResult.matchedCount === 1 ? '' : 's'} —{' '}
+            Playlist now has {pushResult.matchedCount} track{pushResult.matchedCount === 1 ? '' : 's'} from this push —{' '}
             <a href={pushResult.playlistUrl} target="_blank" rel="noreferrer">
               open in {pushResult.service}
             </a>

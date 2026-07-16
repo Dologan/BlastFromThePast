@@ -28,7 +28,15 @@ export interface ServiceConnector {
   isAuthorized(): Promise<boolean>;
   searchTrack(query: TrackQuery): Promise<ServiceTrack[]>;
   createPlaylist(name: string, description: string): Promise<string>;
+  /** Adds tracks to a playlist. Some implementations (Spotify) fully replace the
+   * contents when called on an empty/fresh playlist; see `clearPlaylist`. */
   setPlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void>;
+  /** Track ids currently in a playlist, for append-mode de-duplication. Optional; if
+   * absent, an append just adds without checking for existing tracks. */
+  getPlaylistTrackIds?(playlistId: string): Promise<string[]>;
+  /** Empties a playlist so it can be fully replaced via setPlaylistTracks. Optional;
+   * connectors whose setPlaylistTracks already replaces outright (Spotify) don't need it. */
+  clearPlaylist?(playlistId: string): Promise<void>;
   /** Liked tracks, where the service exposes them (Spotify yes, TIDAL not yet). */
   getLikedTracks?(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }>;
   deepLinkTrack(serviceId: string): string;
