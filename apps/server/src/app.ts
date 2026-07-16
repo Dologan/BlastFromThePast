@@ -16,7 +16,8 @@ import { TidalConnector } from './connectors/tidal.js';
 import { pushPlaylist, type PushResult } from './match/push.js';
 import { ServiceMatcher } from './match/matcher.js';
 import { importSpotifyLiked } from './sync/spotifyLiked.js';
-import { getSetting, setSetting, SETTING_KEYS } from './settings.js';
+import { getSetting, getStoredSetting, setSetting, SETTING_KEYS } from './settings.js';
+import { computeGaps, computeClimbers, type InsightKind } from './stats/insights.js';
 import { PRESETS, type Recipe, type ServiceConnector, type ServiceName } from '@bftp/core';
 import path from 'node:path';
 
@@ -75,8 +76,10 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return {
       lastfmUsername: getSetting(handle, SETTING_KEYS.lastfmUsername) ?? null,
       lastfmApiKeySet: Boolean(getSetting(handle, SETTING_KEYS.lastfmApiKey)),
-      spotifyClientId: getSetting(handle, SETTING_KEYS.spotifyClientId) ?? null,
-      tidalClientId: getSetting(handle, SETTING_KEYS.tidalClientId) ?? null,
+      // Client IDs report only a user override; empty means the built-in
+      // app registration is in effect.
+      spotifyClientId: getStoredSetting(handle, SETTING_KEYS.spotifyClientId) || null,
+      tidalClientId: getStoredSetting(handle, SETTING_KEYS.tidalClientId) || null,
       tidalCountryCode: getSetting(handle, SETTING_KEYS.tidalCountryCode) ?? 'US',
     };
   });
@@ -212,6 +215,21 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return { ...counts, topArtists, enrichment, cache, topGenres, topCountries };
   });
 
+  app.get('/api/library/insights', async (req, reply) => {
+    const q = req.query as { kind?: string; days?: string };
+    const kind: InsightKind = q.kind === 'albums' ? 'albums' : 'tracks';
+    const days = Math.max(1, Number(q.days) || 90);
+    if (q.kind && q.kind !== 'tracks' && q.kind !== 'albums') {
+      return reply.code(400).send({ error: 'kind must be tracks or albums.' });
+    }
+    return {
+      kind,
+      days,
+      gaps: computeGaps(handle.sqlite, kind),
+      climbers: computeClimbers(handle.sqlite, kind, days),
+    };
+  });
+
   // ---- Streaming service connections (OAuth) ----
 
   function parseService(raw: string): ServiceName | null {
@@ -269,19 +287,45 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   // ---- Playlist push ----
 
+  /** All library tracks of an album (via its scrobbles), oldest-first-heard. */
+  const expandAlbumTracks = (albumId: number) =>
+    handle.sqlite
+      .prepare(
+        `SELECT t.id AS trackId, t.name AS name, a.name AS artistName
+         FROM scrobbles s
+         JOIN tracks t ON t.id = s.track_id
+         JOIN artists a ON a.id = t.artist_id
+         WHERE s.album_id = ?
+         GROUP BY t.id
+         ORDER BY MIN(s.uts)`,
+      )
+      .all(albumId) as { trackId: number; name: string; artistName: string }[];
+
   app.post('/api/push', async (req, reply) => {
-    const body = req.body as { recipe?: Recipe; service?: string; name?: string; description?: string };
+    const body = req.body as {
+      recipe?: Recipe;
+      service?: string;
+      name?: string;
+      description?: string;
+      /** Optional subset of preview entity ids (tracks or albums, per mode). */
+      selectedIds?: number[];
+    };
     const service = body.service ? parseService(body.service) : null;
     if (!service) return reply.code(400).send({ error: 'A valid service is required.' });
     if (!body.name?.trim()) return reply.code(400).send({ error: 'A playlist name is required.' });
     if (!body.recipe) return reply.code(400).send({ error: 'A recipe is required.' });
-    if (body.recipe.output.mode !== 'tracks') {
-      return reply.code(400).send({ error: 'Playlist push requires a tracks-mode recipe.' });
-    }
     if (!auth.isAuthorized(service)) return reply.code(400).send({ error: `Connect ${service} first.` });
 
     const preview = recipes.preview(body.recipe);
-    const tracks = preview.rows.map((r) => ({ trackId: r.entityId, name: r.name, artistName: r.artistName }));
+    const selected = body.selectedIds ? new Set(body.selectedIds) : null;
+    const rows = preview.rows.filter((r) => !selected || selected.has(r.entityId));
+
+    // Tracks push as-is; albums expand to their tracks (in preview order).
+    const tracks =
+      body.recipe.output.mode === 'tracks'
+        ? rows.map((r) => ({ trackId: r.entityId, name: r.name, artistName: r.artistName }))
+        : rows.flatMap((r) => expandAlbumTracks(r.entityId));
+    if (tracks.length === 0) return reply.code(400).send({ error: 'Nothing selected to push.' });
     const connector = makeConnector(service);
     const name = body.name.trim();
     const description = body.description ?? 'Created by Blast From The Past';

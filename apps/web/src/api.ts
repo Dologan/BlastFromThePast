@@ -122,6 +122,35 @@ export interface NamedWeight {
   weight: number;
 }
 
+export type InsightKind = 'tracks' | 'albums';
+
+export interface GapRow {
+  entityId: number;
+  name: string;
+  artistName: string;
+  playcount: number;
+  gapSeconds: number;
+  gapStart: number;
+  gapEnd: number;
+}
+
+export interface ClimberRow {
+  entityId: number;
+  name: string;
+  artistName: string;
+  playcount: number;
+  rankNow: number;
+  rankThen: number;
+  climb: number;
+}
+
+export interface Insights {
+  kind: InsightKind;
+  days: number;
+  gaps: GapRow[];
+  climbers: ClimberRow[];
+}
+
 export interface LibrarySummary {
   scrobbles: number;
   tracks: number;
@@ -171,6 +200,8 @@ export const api = {
     }),
   getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
   getLibrarySummary: () => request<LibrarySummary>('/api/library/summary'),
+  getInsights: (kind: InsightKind, days: number) =>
+    request<Insights>(`/api/library/insights?kind=${kind}&days=${days}`),
 
   getFacets: () => request<Facets>('/api/facets'),
   previewRecipe: (recipe: Recipe) =>
@@ -200,11 +231,11 @@ export const api = {
     request<void>(`/api/auth/${service}/disconnect`, { method: 'POST' }),
   importSpotifyLiked: () => request<{ started: boolean }>('/api/sync/spotify-liked', { method: 'POST' }),
 
-  push: (recipe: Recipe, service: ServiceName, name: string) =>
+  push: (recipe: Recipe, service: ServiceName, name: string, selectedIds?: number[]) =>
     request<{ started: boolean; trackCount: number }>('/api/push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipe, service, name }),
+      body: JSON.stringify({ recipe, service, name, selectedIds }),
     }),
   getPushResult: () => request<{ result: PushResult | null }>('/api/push/result'),
 

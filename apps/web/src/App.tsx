@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type AuthStatus, type LibrarySummary, type ServiceName, type Settings, type SyncStatus } from './api';
+import {
+  api,
+  type AuthStatus,
+  type Insights,
+  type InsightKind,
+  type LibrarySummary,
+  type ServiceName,
+  type Settings,
+  type SyncStatus,
+} from './api';
 import RecipeBuilder from './RecipeBuilder';
 
 function formatDate(uts: number | null): string {
@@ -139,28 +148,32 @@ function ConnectionsPanel({
   return (
     <section className="panel">
       <h2>Streaming services</h2>
-      <p className="hint">
-        Create a developer app on each service and paste its client ID. Redirect URI to register:{' '}
-        <code>{window.location.origin}/api/auth/&lt;service&gt;/callback</code>
-      </p>
-      <label>
-        Spotify client ID
-        <input value={spotifyId} onChange={(e) => setSpotifyId(e.target.value)} placeholder="from developer.spotify.com" />
-      </label>
-      <label>
-        TIDAL client ID
-        <input value={tidalId} onChange={(e) => setTidalId(e.target.value)} placeholder="from developer.tidal.com" />
-      </label>
-      <label>
-        TIDAL country code
-        <input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="US" style={{ maxWidth: '6rem' }} />
-      </label>
-      <button onClick={saveIds}>Save client IDs</button>
-      {msg && <p className="hint">{msg}</p>}
       <div className="conns">
         {auth && row('spotify', auth.spotify.connected, auth.spotify.clientIdSet)}
         {auth && row('tidal', auth.tidal.connected, auth.tidal.clientIdSet)}
       </div>
+      <label>
+        TIDAL country code
+        <input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="US" style={{ maxWidth: '6rem' }} />
+      </label>
+      {msg && <p className="hint">{msg}</p>}
+      <details className="advanced">
+        <summary>Advanced: use your own developer apps</summary>
+        <p className="hint">
+          The app ships with built-in client IDs, so connecting just works. To use your own developer app
+          instead, paste its client ID (leave blank to use the built-in one). Redirect URI to register:{' '}
+          <code>{window.location.origin}/api/auth/&lt;service&gt;/callback</code>
+        </p>
+        <label>
+          Spotify client ID override
+          <input value={spotifyId} onChange={(e) => setSpotifyId(e.target.value)} placeholder="built-in" />
+        </label>
+        <label>
+          TIDAL client ID override
+          <input value={tidalId} onChange={(e) => setTidalId(e.target.value)} placeholder="built-in" />
+        </label>
+      </details>
+      <button onClick={saveIds}>Save</button>
     </section>
   );
 }
@@ -274,6 +287,101 @@ function TastePanel({ summary }: { summary: LibrarySummary }) {
   );
 }
 
+function formatDuration(seconds: number): string {
+  const days = seconds / 86400;
+  if (days >= 365) return `${(days / 365).toFixed(1)} years`;
+  if (days >= 60) return `${Math.round(days / 30.4)} months`;
+  return `${Math.round(days)} days`;
+}
+
+function InsightsPanel() {
+  const [kind, setKind] = useState<InsightKind>('tracks');
+  const [days, setDays] = useState(90);
+  const [data, setData] = useState<Insights | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .getInsights(kind, days)
+      .then((d) => {
+        if (!cancelled) {
+          setData(d);
+          setError(null);
+        }
+      })
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, days]);
+
+  return (
+    <section className="panel">
+      <div className="results-head">
+        <h2>Insights</h2>
+        <div className="insight-controls">
+          <select value={kind} onChange={(e) => setKind(e.target.value as InsightKind)}>
+            <option value="tracks">Tracks</option>
+            <option value="albums">Albums</option>
+          </select>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={30}>last 30 days</option>
+            <option value={90}>last 90 days</option>
+            <option value={180}>last 6 months</option>
+            <option value={365}>last year</option>
+          </select>
+        </div>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {loading && !data && <p className="hint">Computing…</p>}
+      {data && (
+        <div className={loading ? 'dimmed' : undefined}>
+          <h3>Longest gaps</h3>
+          <p className="hint">The longest you went without playing something — before coming back to it.</p>
+          {data.gaps.length === 0 ? (
+            <p className="hint">No gaps yet — sync some history first.</p>
+          ) : (
+            <ol className="insight-list">
+              {data.gaps.map((g) => (
+                <li key={g.entityId}>
+                  <span className="insight-main">
+                    <strong>{g.name}</strong> <span className="hint">— {g.artistName}</span>
+                  </span>
+                  <span className="hint">
+                    {formatDuration(g.gapSeconds)} · returned {new Date(g.gapEnd * 1000).toLocaleDateString()}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+          <h3>Climbers</h3>
+          <p className="hint">Biggest jumps up your all-time ranking in the selected window.</p>
+          {data.climbers.length === 0 ? (
+            <p className="hint">Nothing climbed in this window.</p>
+          ) : (
+            <ol className="insight-list">
+              {data.climbers.map((c) => (
+                <li key={c.entityId}>
+                  <span className="insight-main">
+                    <strong>{c.name}</strong> <span className="hint">— {c.artistName}</span>
+                  </span>
+                  <span className="hint">
+                    #{c.rankThen} → #{c.rankNow} <span className="climb">▲{c.climb}</span> · {c.playcount.toLocaleString()} plays
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function LibraryPanel({ summary }: { summary: LibrarySummary | null }) {
   if (!summary) return null;
   return (
@@ -362,24 +470,27 @@ function Dashboard() {
   return (
     <>
       {error && <p className="error">{error}</p>}
-      {settings && (
-        <SettingsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
-      )}
-      <SyncPanel
-        status={status}
-        onSync={() => runJob(api.startLastfmSync)}
-        onEnrich={() => runJob(api.startEnrichment)}
-        onReprocess={() => runJob(api.startReprocess)}
-        onImportLiked={() => runJob(api.importSpotifyLiked)}
-        pendingEnrich={summary?.enrichment.pending ?? 0}
-        hasCache={(summary?.cache.mbArtists ?? 0) + (summary?.cache.mbSearches ?? 0) > 0}
-        spotifyConnected={auth?.spotify.connected ?? false}
-      />
-      {settings && (
-        <ConnectionsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
-      )}
-      <LibraryPanel summary={summary} />
-      {summary && <TastePanel summary={summary} />}
+      <div className="dash">
+        {settings && (
+          <SettingsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
+        )}
+        <SyncPanel
+          status={status}
+          onSync={() => runJob(api.startLastfmSync)}
+          onEnrich={() => runJob(api.startEnrichment)}
+          onReprocess={() => runJob(api.startReprocess)}
+          onImportLiked={() => runJob(api.importSpotifyLiked)}
+          pendingEnrich={summary?.enrichment.pending ?? 0}
+          hasCache={(summary?.cache.mbArtists ?? 0) + (summary?.cache.mbSearches ?? 0) > 0}
+          spotifyConnected={auth?.spotify.connected ?? false}
+        />
+        {settings && (
+          <ConnectionsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
+        )}
+        <LibraryPanel summary={summary} />
+        {summary && <TastePanel summary={summary} />}
+        <InsightsPanel />
+      </div>
     </>
   );
 }

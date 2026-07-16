@@ -255,27 +255,43 @@ function ClauseEditor({
   }
 }
 
-function ResultsList({ result }: { result: PreviewResult | null }) {
+function ResultsList({
+  result,
+  selected,
+  onToggle,
+}: {
+  result: PreviewResult | null;
+  selected: Set<number>;
+  onToggle: (entityId: number) => void;
+}) {
   if (!result) return null;
   if (result.rows.length === 0) return <p className="hint">No matches. Loosen your filters.</p>;
   return (
-    <ol className="results">
+    <ul className="results">
       {result.rows.map((r) => (
-        <li key={`${r.entityKind}-${r.entityId}`}>
-          <div className="result-main">
-            <strong>{r.name}</strong> <span className="hint">— {r.artistName}</span>
-            {r.albumName && r.entityKind === 'track' && <span className="hint"> · {r.albumName}</span>}
-          </div>
-          <div className="result-meta">
-            <span className="hint">
-              {r.playcount.toLocaleString()} plays · last {new Date(r.lastListen * 1000).toLocaleDateString()}
-            </span>
-            <a href={r.spotifyUrl} target="_blank" rel="noreferrer">Spotify</a>
-            <a href={r.tidalUrl} target="_blank" rel="noreferrer">TIDAL</a>
+        <li key={`${r.entityKind}-${r.entityId}`} className={selected.has(r.entityId) ? '' : 'deselected'}>
+          <input
+            type="checkbox"
+            className="result-check"
+            checked={selected.has(r.entityId)}
+            onChange={() => onToggle(r.entityId)}
+          />
+          <div className="result-body">
+            <div className="result-main">
+              <strong>{r.name}</strong> <span className="hint">— {r.artistName}</span>
+              {r.albumName && r.entityKind === 'track' && <span className="hint"> · {r.albumName}</span>}
+            </div>
+            <div className="result-meta">
+              <span className="hint">
+                {r.playcount.toLocaleString()} plays · last {new Date(r.lastListen * 1000).toLocaleDateString()}
+              </span>
+              <a href={r.spotifyUrl} target="_blank" rel="noreferrer">Spotify</a>
+              <a href={r.tidalUrl} target="_blank" rel="noreferrer">TIDAL</a>
+            </div>
           </div>
         </li>
       ))}
-    </ol>
+    </ul>
   );
 }
 
@@ -386,6 +402,7 @@ export default function RecipeBuilder() {
   const [pushing, setPushing] = useState<ServiceName | null>(null);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [fixed, setFixed] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const recipe: Recipe = useMemo(
     () => ({ filters: Object.values(enabled).filter(isMeaningful), output }),
@@ -415,8 +432,8 @@ export default function RecipeBuilder() {
   };
 
   const pushTo = async (service: ServiceName) => {
-    if (output.mode !== 'tracks') {
-      setPushMsg('Switch output to Tracks to push a playlist.');
+    if (selected.size === 0) {
+      setPushMsg('Nothing selected — tick at least one result.');
       return;
     }
     const playlistName = name.trim() || 'Blast From The Past';
@@ -425,7 +442,7 @@ export default function RecipeBuilder() {
     setFixed(new Set());
     setPushMsg(`Pushing to ${service}…`);
     try {
-      await api.push(recipe, service, playlistName);
+      await api.push(recipe, service, playlistName, [...selected]);
       // Poll until the background push job finishes, then read its result.
       for (let i = 0; i < 200; i++) {
         const st = await api.getSyncStatus();
@@ -442,19 +459,28 @@ export default function RecipeBuilder() {
     }
   };
 
-  // Debounced live preview.
+  // Debounced live preview. Fresh results start fully selected.
   useEffect(() => {
     const t = setTimeout(() => {
       api
         .previewRecipe(recipe)
         .then((r) => {
           setResult(r);
+          setSelected(new Set(r.rows.map((row) => row.entityId)));
           setError(null);
         })
         .catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }, 350);
     return () => clearTimeout(t);
   }, [recipe]);
+
+  const toggleSelected = (entityId: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(entityId)) next.delete(entityId);
+      else next.add(entityId);
+      return next;
+    });
 
   const toggle = (type: ClauseType) =>
     setEnabled((prev) => {
@@ -507,6 +533,7 @@ export default function RecipeBuilder() {
 
   return (
     <div className="builder">
+      <div className="builder-col">
       <section className="panel">
         <div className="results-head">
           <h2>Filters</h2>
@@ -595,6 +622,26 @@ export default function RecipeBuilder() {
         </div>
       </section>
 
+      {saved.length > 0 && (
+        <section className="panel">
+          <h2>Saved recipes</h2>
+          <ul className="saved-list">
+            {saved.map((r) => (
+              <li key={r.id}>
+                <button className="link" onClick={() => load(r)}>
+                  {r.name}
+                </button>
+                <button className="link danger" onClick={() => remove(r.id)}>
+                  delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      </div>
+
+      <div className="builder-col results-col">
       <section className="panel">
         <div className="results-head">
           <h2>
@@ -612,22 +659,39 @@ export default function RecipeBuilder() {
           </div>
         </div>
         {error && <p className="error">{error}</p>}
-        {output.mode === 'tracks' && auth && (auth.spotify.connected || auth.tidal.connected) && (
+        {result && result.rows.length > 0 && (
+          <div className="selection-row">
+            <span className="hint">
+              {selected.size} of {result.rows.length} selected
+            </span>
+            <button className="link" onClick={() => setSelected(new Set(result.rows.map((r) => r.entityId)))}>
+              all
+            </button>
+            <button className="link" onClick={() => setSelected(new Set())}>
+              none
+            </button>
+          </div>
+        )}
+        {auth && (auth.spotify.connected || auth.tidal.connected) && (
           <div className="push-row">
-            <span className="hint">Push these tracks as a playlist:</span>
+            <span className="hint">
+              {output.mode === 'tracks'
+                ? 'Push the selected tracks as a playlist:'
+                : 'Push the selected albums (all their tracks) as a playlist:'}
+            </span>
             {auth.spotify.connected && (
-              <button className="secondary" disabled={pushing !== null} onClick={() => pushTo('spotify')}>
+              <button className="secondary" disabled={pushing !== null || selected.size === 0} onClick={() => pushTo('spotify')}>
                 {pushing === 'spotify' ? 'Pushing…' : 'Spotify'}
               </button>
             )}
             {auth.tidal.connected && (
-              <button className="secondary" disabled={pushing !== null} onClick={() => pushTo('tidal')}>
+              <button className="secondary" disabled={pushing !== null || selected.size === 0} onClick={() => pushTo('tidal')}>
                 {pushing === 'tidal' ? 'Pushing…' : 'TIDAL'}
               </button>
             )}
           </div>
         )}
-        {output.mode === 'tracks' && auth && !auth.spotify.connected && !auth.tidal.connected && (
+        {auth && !auth.spotify.connected && !auth.tidal.connected && (
           <p className="hint">Connect Spotify or TIDAL on the Dashboard to push playlists.</p>
         )}
         {pushMsg && <p className="hint">{pushMsg}</p>}
@@ -648,26 +712,9 @@ export default function RecipeBuilder() {
             onFixed={(trackId) => setFixed((prev) => new Set(prev).add(trackId))}
           />
         )}
-        <ResultsList result={result} />
+        <ResultsList result={result} selected={selected} onToggle={toggleSelected} />
       </section>
-
-      {saved.length > 0 && (
-        <section className="panel">
-          <h2>Saved recipes</h2>
-          <ul className="saved-list">
-            {saved.map((r) => (
-              <li key={r.id}>
-                <button className="link" onClick={() => load(r)}>
-                  {r.name}
-                </button>
-                <button className="link danger" onClick={() => remove(r.id)}>
-                  delete
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      </div>
     </div>
   );
 }
