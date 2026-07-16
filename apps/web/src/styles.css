@@ -13,14 +13,13 @@
 
 body {
   margin: 0;
-  display: flex;
-  justify-content: center;
   background: light-dark(#f5f4f2, #17161a);
   color: light-dark(#222, #e8e6e3);
 }
 
 main {
   width: min(76rem, 100% - 2rem);
+  margin: 0 auto;
   padding: 1.5rem 0 4rem;
 }
 

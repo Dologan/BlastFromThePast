@@ -10,6 +10,7 @@ import {
   type SyncStatus,
 } from './api';
 import RecipeBuilder from './RecipeBuilder';
+import { countryName } from './countries';
 
 function formatDate(uts: number | null): string {
   if (!uts) return '—';
@@ -237,13 +238,15 @@ function SyncPanel({
   );
 }
 
-function BarList({ items }: { items: { name: string; weight: number }[] }) {
+function BarList({ items, labelFor }: { items: { name: string; weight: number }[]; labelFor?: (name: string) => string }) {
   const max = items.reduce((m, i) => Math.max(m, i.weight), 0) || 1;
   return (
     <ul className="bars">
       {items.map((i) => (
         <li key={i.name}>
-          <span className="bar-label">{i.name}</span>
+          <span className="bar-label" title={i.name}>
+            {labelFor ? labelFor(i.name) : i.name}
+          </span>
           <span className="bar-track">
             <span className="bar-fill" style={{ width: `${(i.weight / max) * 100}%` }} />
           </span>
@@ -280,7 +283,7 @@ function TastePanel({ summary }: { summary: LibrarySummary }) {
       {summary.topCountries.length > 0 && (
         <>
           <h3>Top countries</h3>
-          <BarList items={summary.topCountries} />
+          <BarList items={summary.topCountries} labelFor={countryName} />
         </>
       )}
     </section>

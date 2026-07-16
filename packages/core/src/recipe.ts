@@ -6,7 +6,11 @@
  */
 
 export interface DateBound {
-  /** Inclusive lower bound, ISO date 'YYYY-MM-DD' (or 'YYYY-MM' for peakMonth). */
+  /**
+   * Inclusive lower bound, ISO date 'YYYY-MM-DD'. For peakMonth this is
+   * truncated to the containing month ('YYYY-MM') when compiled, so a bare
+   * 'YYYY-MM' (from older saved recipes) still works.
+   */
   after?: string;
   /** Inclusive upper bound, same format as `after`. */
   before?: string;

@@ -19,6 +19,7 @@ import {
   type RecipeOutput,
   type SortKey,
 } from './recipeTypes';
+import { countryName } from './countries';
 
 const CLAUSE_LABELS: Record<ClauseType, string> = {
   genre: 'Genre',
@@ -95,11 +96,14 @@ function ChipInput({
   onChange,
   suggestions,
   placeholder,
+  labelFor,
 }: {
   values: string[];
   onChange: (v: string[]) => void;
   suggestions: string[];
   placeholder: string;
+  /** Displays a friendlier label for a stored value (e.g. country code -> name) without changing what's stored. */
+  labelFor?: (v: string) => string;
 }) {
   const [draft, setDraft] = useState('');
   const listId = useMemo(() => `dl-${Math.random().toString(36).slice(2)}`, []);
@@ -113,7 +117,7 @@ function ChipInput({
       <div className="chips">
         {values.map((v) => (
           <span key={v} className="chip">
-            {v}
+            {labelFor ? labelFor(v) : v}
             <button type="button" onClick={() => onChange(values.filter((x) => x !== v))}>
               ×
             </button>
@@ -135,7 +139,11 @@ function ChipInput({
       />
       <datalist id={listId}>
         {suggestions.map((s) => (
-          <option key={s} value={s} />
+          // The option's value (what gets filled into the input on pick) stays
+          // the raw code; its text content is the friendlier suggestion label.
+          <option key={s} value={s}>
+            {labelFor ? labelFor(s) : s}
+          </option>
         ))}
       </datalist>
     </div>
@@ -178,7 +186,8 @@ function ClauseEditor({
             values={clause.anyOf}
             onChange={(anyOf) => onChange({ ...clause, anyOf })}
             suggestions={facets?.countries ?? []}
-            placeholder="e.g. SE, GB…"
+            placeholder="e.g. Sweden, United Kingdom…"
+            labelFor={countryName}
           />
           <label className="inline">
             <input
@@ -216,14 +225,18 @@ function ClauseEditor({
           <input type="date" value={clause.before ?? ''} onChange={(e) => onChange({ ...clause, before: e.target.value || undefined })} />
         </div>
       );
-    case 'peakMonth':
+    case 'peakMonth': {
+      // Older saved recipes may hold a bare 'YYYY-MM' from the old month
+      // picker; pad it so a date input can display it.
+      const toDateValue = (v?: string) => (v && v.length === 7 ? `${v}-01` : (v ?? ''));
       return (
         <div className="daterange">
-          <input type="month" value={clause.after ?? ''} onChange={(e) => onChange({ ...clause, after: e.target.value || undefined })} />
+          <input type="date" value={toDateValue(clause.after)} onChange={(e) => onChange({ ...clause, after: e.target.value || undefined })} />
           <span>→</span>
-          <input type="month" value={clause.before ?? ''} onChange={(e) => onChange({ ...clause, before: e.target.value || undefined })} />
+          <input type="date" value={toDateValue(clause.before)} onChange={(e) => onChange({ ...clause, before: e.target.value || undefined })} />
         </div>
       );
+    }
     case 'playcount':
       return (
         <div className="daterange">
