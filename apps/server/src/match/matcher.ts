@@ -39,16 +39,35 @@ export class ServiceMatcher {
     return row ? { serviceId: row.service_id, method: row.method, confidence: row.confidence } : null;
   }
 
-  private store(trackId: number, result: MatchResult): void {
+  private store(trackId: number, result: MatchResult, verified = 0): void {
     this.handle.sqlite
       .prepare(
         `INSERT INTO service_links (entity_type, entity_id, service, service_id, method, confidence, verified, matched_at)
-         VALUES ('track', ?, ?, ?, ?, ?, 0, ?)
+         VALUES ('track', ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(entity_type, entity_id, service) DO UPDATE SET
            service_id = excluded.service_id, method = excluded.method,
-           confidence = excluded.confidence, matched_at = excluded.matched_at`,
+           confidence = excluded.confidence, verified = excluded.verified, matched_at = excluded.matched_at`,
       )
-      .run(trackId, this.service, result.serviceId, result.method, result.confidence, Math.floor(Date.now() / 1000));
+      .run(trackId, this.service, result.serviceId, result.method, result.confidence, verified, Math.floor(Date.now() / 1000));
+  }
+
+  /** Candidate matches for a track, for the fix-up UI (never auto-cached). */
+  async candidates(trackId: number): Promise<ServiceTrack[]> {
+    const info = this.trackInfo(trackId);
+    if (!info) return [];
+    return this.connector.searchTrack({ artistName: info.artistName, trackName: info.name });
+  }
+
+  /** Records a human-chosen match as verified/full-confidence. */
+  setOverride(trackId: number, serviceId: string): void {
+    this.handle.sqlite
+      .prepare(
+        `INSERT INTO service_links (entity_type, entity_id, service, service_id, method, confidence, verified, matched_at)
+         VALUES ('track', ?, ?, ?, 'manual', 1, 1, ?)
+         ON CONFLICT(entity_type, entity_id, service) DO UPDATE SET
+           service_id = excluded.service_id, method = 'manual', confidence = 1, verified = 1, matched_at = excluded.matched_at`,
+      )
+      .run(trackId, this.service, serviceId, Math.floor(Date.now() / 1000));
   }
 
   private trackInfo(trackId: number): TrackInfo | null {

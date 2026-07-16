@@ -22,7 +22,10 @@ export type Clause =
   | { type: 'loved'; source?: 'lastfm' | 'spotify' }
   | { type: 'genre'; anyOf: string[]; mode?: 'canonical' | 'raw' }
   | { type: 'country'; anyOf: string[]; negate?: boolean }
-  | { type: 'excludeRecentlyPlaylisted'; days: number };
+  | { type: 'excludeRecentlyPlaylisted'; days: number }
+  // First/last listen fell within ±windowDays of today's calendar day, in any
+  // year — the "on this day" / anniversaries filter.
+  | { type: 'anniversary'; field?: 'firstListen' | 'lastListen'; windowDays: number };
 
 export type ClauseType = Clause['type'];
 

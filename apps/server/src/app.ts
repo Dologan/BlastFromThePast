@@ -14,9 +14,10 @@ import { AuthManager, AuthError } from './auth/authManager.js';
 import { SpotifyConnector } from './connectors/spotify.js';
 import { TidalConnector } from './connectors/tidal.js';
 import { pushPlaylist, type PushResult } from './match/push.js';
+import { ServiceMatcher } from './match/matcher.js';
 import { importSpotifyLiked } from './sync/spotifyLiked.js';
 import { getSetting, setSetting, SETTING_KEYS } from './settings.js';
-import type { Recipe, ServiceConnector, ServiceName } from '@bftp/core';
+import { PRESETS, type Recipe, type ServiceConnector, type ServiceName } from '@bftp/core';
 import path from 'node:path';
 
 const MB_USER_AGENT =
@@ -294,6 +295,32 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   app.get('/api/push/result', async () => ({ result: lastPush }));
+
+  // ---- Match fix-up ----
+
+  app.get('/api/match/candidates', async (req, reply) => {
+    const q = req.query as { service?: string; trackId?: string };
+    const service = q.service ? parseService(q.service) : null;
+    const trackId = Number(q.trackId);
+    if (!service || !Number.isFinite(trackId)) {
+      return reply.code(400).send({ error: 'service and trackId are required.' });
+    }
+    if (!auth.isAuthorized(service)) return reply.code(400).send({ error: `Connect ${service} first.` });
+    const matcher = new ServiceMatcher(handle, makeConnector(service), service);
+    return { candidates: await matcher.candidates(trackId) };
+  });
+
+  app.post('/api/match/override', async (req, reply) => {
+    const body = req.body as { service?: string; trackId?: number; serviceId?: string };
+    const service = body.service ? parseService(body.service) : null;
+    if (!service || !body.trackId || !body.serviceId) {
+      return reply.code(400).send({ error: 'service, trackId and serviceId are required.' });
+    }
+    new ServiceMatcher(handle, makeConnector(service), service).setOverride(body.trackId, body.serviceId);
+    reply.code(204);
+  });
+
+  app.get('/api/presets', async () => PRESETS);
 
   app.get('/api/facets', async () => recipes.facets());
 

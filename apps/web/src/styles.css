@@ -243,6 +243,82 @@ button.link.danger {
   flex-wrap: wrap;
 }
 
+.preset-picker {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+  gap: 0.2rem;
+  font-size: 0.9em;
+}
+
+.preset-picker select {
+  margin: 0;
+  width: auto;
+}
+
+.fixup {
+  border-top: 1px solid light-dark(#e2e0dc, #322f38);
+  margin-top: 1rem;
+  padding-top: 0.5rem;
+}
+
+.fixup-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.fixup-list li {
+  margin-bottom: 0.4rem;
+}
+
+.candidates {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Responsive: stack on narrow screens (phones). */
+@media (max-width: 640px) {
+  main {
+    padding: 1rem 0 3rem;
+  }
+  .app-header {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .tabs {
+    width: 100%;
+  }
+  .tabs .tab {
+    flex: 1;
+  }
+  .output-controls,
+  .save-row,
+  .results-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .output-controls select,
+  .output-controls input,
+  .save-row input {
+    width: 100%;
+    min-width: 0;
+  }
+  input {
+    max-width: none;
+  }
+  .bars li {
+    grid-template-columns: minmax(6rem, 1fr) 1fr auto;
+  }
+  .result-meta {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .conn-row {
+    flex-wrap: wrap;
+  }
+}
+
 h1 {
   margin-bottom: 0.25rem;
 }

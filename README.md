@@ -10,7 +10,7 @@ one-time backfill, syncs are fast and incremental.
 
 ## Status
 
-Phase 4 of 5 complete:
+All five build phases complete:
 
 - [x] Monorepo scaffold (npm workspaces, TypeScript everywhere)
 - [x] SQLite schema + migrations (scrobbles, entities, tags, stats, service links)
@@ -38,7 +38,9 @@ Phase 4 of 5 complete:
       storage, Spotify liked-tracks import, service matching (ISRC → search,
       cached in `service_links`), and playlist push with matched/unmatched
       reporting. Connections + push UI wired in.
-- [ ] Presets, anniversaries, mobile styling, match fix-up UI
+- [x] Polish: built-in preset recipes, an "on this day" anniversary filter,
+      a match fix-up UI (search + manual override for imperfect matches), and
+      responsive styling for phone use.
 
 ## Running
 
@@ -94,7 +96,10 @@ Notes:
 
 Then in the **Recipe builder**, a tracks-mode recipe can be pushed straight to
 a new playlist on either connected service; unmatched and low-confidence
-tracks are reported back.
+tracks are listed with a **fix-up** control to search and pick the right match
+manually (remembered as a verified link). Start from a **preset** (Forgotten
+favourites, On this day, Deep cuts of a genre, Long-lost loves, Album
+rediscovery) and tweak from there.
 
 ## Layout
 

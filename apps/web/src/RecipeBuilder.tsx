@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   api,
   type AuthStatus,
+  type Candidate,
   type Facets,
+  type Preset,
   type PreviewResult,
   type PushResult,
   type SavedRecipe,
   type ServiceName,
+  type UnmatchedTrack,
 } from './api';
 import {
   SORT_LABELS,
@@ -22,6 +25,7 @@ const CLAUSE_LABELS: Record<ClauseType, string> = {
   country: 'Country of origin',
   notPlayedInDays: "Haven't played in…",
   playedInDays: 'Played within…',
+  anniversary: 'On this day (anniversary)',
   firstListen: 'First listened between',
   lastListen: 'Last listened between',
   peakMonth: 'Peak listening between',
@@ -35,6 +39,7 @@ const CLAUSE_ORDER: ClauseType[] = [
   'country',
   'notPlayedInDays',
   'playedInDays',
+  'anniversary',
   'firstListen',
   'lastListen',
   'peakMonth',
@@ -63,6 +68,8 @@ function defaultClause(type: ClauseType): Clause {
       return { type };
     case 'excludeRecentlyPlaylisted':
       return { type, days: 30 };
+    case 'anniversary':
+      return { type, field: 'firstListen', windowDays: 3 };
   }
 }
 
@@ -233,6 +240,18 @@ function ClauseEditor({
           <option value="spotify">Spotify liked</option>
         </select>
       );
+    case 'anniversary':
+      return (
+        <div className="daterange">
+          <select value={clause.field ?? 'firstListen'} onChange={(e) => onChange({ ...clause, field: e.target.value as 'firstListen' | 'lastListen' })}>
+            <option value="firstListen">first listened</option>
+            <option value="lastListen">last listened</option>
+          </select>
+          <span>within</span>
+          <input type="number" min={0} value={clause.windowDays} onChange={(e) => onChange({ ...clause, windowDays: Number(e.target.value) })} style={{ width: '4rem' }} />
+          <span>days of today (any year)</span>
+        </div>
+      );
   }
 }
 
@@ -260,6 +279,95 @@ function ResultsList({ result }: { result: PreviewResult | null }) {
   );
 }
 
+function FixupRow({
+  service,
+  track,
+  fixed,
+  onFixed,
+}: {
+  service: ServiceName;
+  track: UnmatchedTrack;
+  fixed: boolean;
+  onFixed: (trackId: number) => void;
+}) {
+  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const find = async () => {
+    setLoading(true);
+    try {
+      const { candidates } = await api.getCandidates(service, track.trackId);
+      setCandidates(candidates);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pick = async (c: Candidate) => {
+    await api.overrideMatch(service, track.trackId, c.serviceId);
+    onFixed(track.trackId);
+  };
+
+  return (
+    <li>
+      <span>
+        {track.name} <span className="hint">— {track.artistName}</span>
+      </span>{' '}
+      {fixed ? (
+        <span className="hint">✓ matched</span>
+      ) : candidates ? (
+        candidates.length === 0 ? (
+          <span className="hint">no candidates</span>
+        ) : (
+          <span className="candidates">
+            {candidates.slice(0, 4).map((c) => (
+              <button key={c.serviceId} className="link" onClick={() => pick(c)} title={`${c.name} — ${c.artistName}`}>
+                {c.name} · {c.artistName}
+              </button>
+            ))}
+          </span>
+        )
+      ) : (
+        <button className="link" onClick={find} disabled={loading}>
+          {loading ? 'searching…' : 'find match'}
+        </button>
+      )}
+    </li>
+  );
+}
+
+function MatchFixup({
+  result,
+  fixed,
+  onFixed,
+}: {
+  result: PushResult;
+  fixed: Set<number>;
+  onFixed: (trackId: number) => void;
+}) {
+  const rows = [...result.unmatched, ...result.lowConfidence];
+  if (rows.length === 0) return null;
+  return (
+    <div className="fixup">
+      <h3>Fix matches</h3>
+      <p className="hint">
+        These tracks didn't match cleanly. Pick the right result to add it and remember the choice.
+      </p>
+      <ul className="fixup-list">
+        {rows.map((t) => (
+          <FixupRow
+            key={t.trackId}
+            service={result.service}
+            track={t}
+            fixed={fixed.has(t.trackId)}
+            onFixed={onFixed}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function RecipeBuilder() {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [enabled, setEnabled] = useState<Partial<Record<ClauseType, Clause>>>({
@@ -273,9 +381,11 @@ export default function RecipeBuilder() {
   const [name, setName] = useState('');
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [presets, setPresets] = useState<Preset[]>([]);
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [pushing, setPushing] = useState<ServiceName | null>(null);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const [fixed, setFixed] = useState<Set<number>>(new Set());
 
   const recipe: Recipe = useMemo(
     () => ({ filters: Object.values(enabled).filter(isMeaningful), output }),
@@ -286,7 +396,23 @@ export default function RecipeBuilder() {
     api.getFacets().then(setFacets).catch(() => {});
     api.listRecipes().then(setSaved).catch(() => {});
     api.getAuthStatus().then(setAuth).catch(() => {});
+    api.getPresets().then(setPresets).catch(() => {});
   }, []);
+
+  const applyDefinition = (def: Recipe) => {
+    const byType: Partial<Record<ClauseType, Clause>> = {};
+    for (const c of def.filters) byType[c.type] = c;
+    setEnabled(byType);
+    setOutput(def.output);
+  };
+
+  const loadPreset = (id: string) => {
+    const preset = presets.find((p) => p.id === id);
+    if (!preset) return;
+    applyDefinition(preset.definition);
+    setName(preset.name);
+    setCurrentId(null); // a preset is a starting point, not a saved recipe
+  };
 
   const pushTo = async (service: ServiceName) => {
     if (output.mode !== 'tracks') {
@@ -296,6 +422,7 @@ export default function RecipeBuilder() {
     const playlistName = name.trim() || 'Blast From The Past';
     setPushing(service);
     setPushResult(null);
+    setFixed(new Set());
     setPushMsg(`Pushing to ${service}…`);
     try {
       await api.push(recipe, service, playlistName);
@@ -357,10 +484,7 @@ export default function RecipeBuilder() {
   };
 
   const load = (r: SavedRecipe) => {
-    const byType: Partial<Record<ClauseType, Clause>> = {};
-    for (const c of r.definition.filters) byType[c.type] = c;
-    setEnabled(byType);
-    setOutput(r.definition.output);
+    applyDefinition(r.definition);
     setName(r.name);
     setCurrentId(r.id);
   };
@@ -384,7 +508,28 @@ export default function RecipeBuilder() {
   return (
     <div className="builder">
       <section className="panel">
-        <h2>Filters</h2>
+        <div className="results-head">
+          <h2>Filters</h2>
+          {presets.length > 0 && (
+            <label className="preset-picker">
+              Start from a preset
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) loadPreset(e.target.value);
+                  e.target.value = '';
+                }}
+              >
+                <option value="">Choose…</option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id} title={p.description}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
         <div className="clause-toggles">
           {CLAUSE_ORDER.map((type) => (
             <button
@@ -495,6 +640,13 @@ export default function RecipeBuilder() {
             {pushResult.unmatched.length > 0 && `. ${pushResult.unmatched.length} couldn't be matched.`}
             {pushResult.lowConfidence.length > 0 && ` ${pushResult.lowConfidence.length} low-confidence match(es).`}
           </p>
+        )}
+        {pushResult && (
+          <MatchFixup
+            result={pushResult}
+            fixed={fixed}
+            onFixed={(trackId) => setFixed((prev) => new Set(prev).add(trackId))}
+          />
         )}
         <ResultsList result={result} />
       </section>

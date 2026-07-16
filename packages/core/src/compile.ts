@@ -36,6 +36,13 @@ function toEpoch(date: string, endOfDay = false): number {
   return endOfDay ? base + 86399 : base;
 }
 
+/** Day of year (1–366, UTC) for a unix-seconds timestamp. */
+function dayOfYearUTC(seconds: number): number {
+  const d = new Date(seconds * 1000);
+  const start = Date.UTC(d.getUTCFullYear(), 0, 0);
+  return Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - start) / 86400000);
+}
+
 function grainFor(mode: 'tracks' | 'albums'): Grain {
   if (mode === 'tracks') {
     return {
@@ -135,6 +142,14 @@ function compileClause(clause: Clause, g: Grain, ctx: CompileContext, params: un
     case 'excludeRecentlyPlaylisted': {
       const recentCond = `pl.created_at >= ${ctx.nowSeconds - clause.days * 86400}`;
       return `NOT ${g.playlistExists(recentCond)}`;
+    }
+    case 'anniversary': {
+      const col = clause.field === 'lastListen' ? `${S}.last_listen` : `${S}.first_listen`;
+      const today = dayOfYearUTC(ctx.nowSeconds);
+      const w = Math.max(0, Math.floor(clause.windowDays));
+      const e = `CAST(strftime('%j', ${col}, 'unixepoch') AS INTEGER)`;
+      // Circular distance on the calendar wheel (handles Dec/Jan wraparound).
+      return `(ABS(${e} - ${today}) <= ${w} OR 366 - ABS(${e} - ${today}) <= ${w})`;
     }
   }
 }

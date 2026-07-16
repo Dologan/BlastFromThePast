@@ -232,4 +232,26 @@ describe('compileRecipe (executed)', () => {
     const { rows } = run({ filters: [], output: output({ sort: 'weighted_random' }) });
     expect(rows).toHaveLength(3);
   });
+
+  it('anniversary matches tracks first-listened near today (any year)', () => {
+    // Add a track first listened exactly one year before NOW (same calendar day).
+    const opethId = (handle.sqlite.prepare("SELECT id FROM artists WHERE name='Opeth'").get() as any).id;
+    const anniv = Number(
+      handle.sqlite.prepare('INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, ?, ?)').run(opethId, 'Harvest', 'harvest').lastInsertRowid,
+    );
+    handle.sqlite.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(anniv, NOW - YEAR);
+    // And one first-listened ~6 months off, which must NOT match a tight window.
+    const off = Number(
+      handle.sqlite.prepare('INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, ?, ?)').run(opethId, 'Benighted', 'benighted').lastInsertRowid,
+    );
+    handle.sqlite.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(off, NOW - Math.floor(YEAR / 2));
+    rebuildStats(handle.sqlite);
+
+    const names = run({
+      filters: [{ type: 'anniversary', field: 'firstListen', windowDays: 3 }],
+      output: output({ limit: 100 }),
+    }).rows.map((r) => r.name);
+    expect(names).toContain('Harvest');
+    expect(names).not.toContain('Benighted');
+  });
 });

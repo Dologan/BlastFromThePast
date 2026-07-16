@@ -61,6 +61,20 @@ export interface Facets {
   genres: string[];
 }
 
+export interface Preset {
+  id: string;
+  name: string;
+  description: string;
+  definition: Recipe;
+}
+
+export interface Candidate {
+  serviceId: string;
+  name: string;
+  artistName: string;
+  albumName?: string;
+}
+
 export interface SyncProgress {
   phase: 'scrobbles' | 'loved' | 'stats';
   page?: number;
@@ -193,4 +207,14 @@ export const api = {
       body: JSON.stringify({ recipe, service, name }),
     }),
   getPushResult: () => request<{ result: PushResult | null }>('/api/push/result'),
+
+  getPresets: () => request<Preset[]>('/api/presets'),
+  getCandidates: (service: ServiceName, trackId: number) =>
+    request<{ candidates: Candidate[] }>(`/api/match/candidates?service=${service}&trackId=${trackId}`),
+  overrideMatch: (service: ServiceName, trackId: number, serviceId: string) =>
+    request<void>('/api/match/override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service, trackId, serviceId }),
+    }),
 };
