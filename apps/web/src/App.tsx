@@ -8,6 +8,8 @@ import {
   type ServiceName,
   type Settings,
   type SyncStatus,
+  type TopArtists,
+  type TopArtistsRange,
 } from './api';
 import RecipeBuilder from './RecipeBuilder';
 import { countryName } from './countries';
@@ -97,6 +99,7 @@ function ConnectionsPanel({
   const [spotifyId, setSpotifyId] = useState(settings.spotifyClientId ?? '');
   const [tidalId, setTidalId] = useState(settings.tidalClientId ?? '');
   const [country, setCountry] = useState(settings.tidalCountryCode ?? 'US');
+  const [defaultService, setDefaultService] = useState(settings.defaultService ?? '');
   const [msg, setMsg] = useState<string | null>(null);
 
   const refresh = useCallback(() => api.getAuthStatus().then(setAuth).catch(() => {}), []);
@@ -111,7 +114,12 @@ function ConnectionsPanel({
   }, [refresh]);
 
   const saveIds = async () => {
-    await api.saveSettings({ spotifyClientId: spotifyId, tidalClientId: tidalId, tidalCountryCode: country });
+    await api.saveSettings({
+      spotifyClientId: spotifyId,
+      tidalClientId: tidalId,
+      tidalCountryCode: country,
+      defaultService,
+    });
     onSaved();
     setMsg('Saved.');
   };
@@ -156,6 +164,14 @@ function ConnectionsPanel({
       <label>
         TIDAL country code
         <input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="US" style={{ maxWidth: '6rem' }} />
+      </label>
+      <label>
+        Default service (used for links on the dashboard)
+        <select value={defaultService} onChange={(e) => setDefaultService(e.target.value)} style={{ maxWidth: '10rem' }}>
+          <option value="">none</option>
+          <option value="spotify">Spotify</option>
+          <option value="tidal">TIDAL</option>
+        </select>
       </label>
       {msg && <p className="hint">{msg}</p>}
       <details className="advanced">
@@ -297,17 +313,41 @@ function formatDuration(seconds: number): string {
   return `${Math.round(days)} days`;
 }
 
-function EntityName({ name, artistName }: { name: string; artistName: string | null }) {
+function EntityLink({
+  name,
+  artistName,
+  spotifyUrl,
+  tidalUrl,
+  defaultService,
+}: {
+  name: string;
+  artistName: string | null;
+  spotifyUrl: string;
+  tidalUrl: string;
+  defaultService: ServiceName | null;
+}) {
+  const url = defaultService === 'spotify' ? spotifyUrl : defaultService === 'tidal' ? tidalUrl : null;
+  const label = (
+    <>
+      <strong>{name}</strong> {artistName && <span className="hint">— {artistName}</span>}
+    </>
+  );
   return (
     <span className="insight-main">
-      <strong>{name}</strong> {artistName && <span className="hint">— {artistName}</span>}
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer">
+          {label}
+        </a>
+      ) : (
+        label
+      )}
     </span>
   );
 }
 
-function InsightsPanel() {
+function InsightsPanel({ defaultService }: { defaultService: ServiceName | null }) {
   const [kind, setKind] = useState<InsightKind>('tracks');
-  const [days, setDays] = useState(90);
+  const [limit, setLimit] = useState(10);
   const [shuffleKey, setShuffleKey] = useState(0);
   const [data, setData] = useState<Insights | null>(null);
   const [loading, setLoading] = useState(false);
@@ -317,7 +357,7 @@ function InsightsPanel() {
     let cancelled = false;
     setLoading(true);
     api
-      .getInsights(kind, days)
+      .getInsights(kind, limit)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -329,7 +369,7 @@ function InsightsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [kind, days, shuffleKey]);
+  }, [kind, limit, shuffleKey]);
 
   return (
     <section className="panel">
@@ -341,12 +381,20 @@ function InsightsPanel() {
             <option value="albums">Albums</option>
             <option value="artists">Artists</option>
           </select>
-          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
-            <option value={30}>last 30 days</option>
-            <option value={90}>last 90 days</option>
-            <option value={180}>last 6 months</option>
-            <option value={365}>last year</option>
-          </select>
+          <label className="inline">
+            show
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={limit}
+              onChange={(e) => setLimit(Math.min(50, Math.max(1, Number(e.target.value) || 10)))}
+              style={{ width: '4rem' }}
+            />
+          </label>
+          <button className="link" onClick={() => setShuffleKey((k) => k + 1)}>
+            shuffle
+          </button>
         </div>
       </div>
       {error && <p className="error">{error}</p>}
@@ -363,7 +411,7 @@ function InsightsPanel() {
             <ol className="insight-list">
               {data.gaps.map((g) => (
                 <li key={g.entityId}>
-                  <EntityName name={g.name} artistName={g.artistName} />
+                  <EntityLink name={g.name} artistName={g.artistName} spotifyUrl={g.spotifyUrl} tidalUrl={g.tidalUrl} defaultService={defaultService} />
                   <span className="hint">
                     silent for {formatDuration(g.gapSeconds)} · {g.playcount.toLocaleString()} plays before that
                   </span>
@@ -371,22 +419,37 @@ function InsightsPanel() {
               ))}
             </ol>
           )}
-          <div className="results-head">
-            <h3>Neglected</h3>
-            <button className="link" onClick={() => setShuffleKey((k) => k + 1)}>
-              shuffle
-            </button>
-          </div>
-          <p className="hint">A random sample of things gone quiet for a while — for when "the longest gap" gets predictable.</p>
-          {data.neglected.length === 0 ? (
-            <p className="hint">Nothing's been quiet long enough in this window yet.</p>
+          <h3>Neglected gems</h3>
+          <p className="hint">
+            Well-loved (top 10% played, or marked loved/liked) but untouched for 3+ years — a random pick each time.
+          </p>
+          {data.neglectedGems.length === 0 ? (
+            <p className="hint">Nothing qualifies yet.</p>
           ) : (
             <ol className="insight-list">
-              {data.neglected.map((n) => (
+              {data.neglectedGems.map((n) => (
                 <li key={n.entityId}>
-                  <EntityName name={n.name} artistName={n.artistName} />
+                  <EntityLink name={n.name} artistName={n.artistName} spotifyUrl={n.spotifyUrl} tidalUrl={n.tidalUrl} defaultService={defaultService} />
                   <span className="hint">
-                    last played {new Date(n.lastListen * 1000).toLocaleDateString()} · {n.playcount.toLocaleString()} plays
+                    {n.liked && '♥ · '}last played {new Date(n.lastListen * 1000).toLocaleDateString()} ·{' '}
+                    {n.playcount.toLocaleString()} plays
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+          <h3>On this day</h3>
+          <p className="hint">First or last played within a day of today, in years past.</p>
+          {data.onThisDay.length === 0 ? (
+            <p className="hint">Nothing lines up with today yet.</p>
+          ) : (
+            <ol className="insight-list">
+              {data.onThisDay.map((o) => (
+                <li key={o.entityId}>
+                  <EntityLink name={o.name} artistName={o.artistName} spotifyUrl={o.spotifyUrl} tidalUrl={o.tidalUrl} defaultService={defaultService} />
+                  <span className="hint">
+                    {o.matched === 'first' ? 'first' : 'last'} played {new Date(o.matchedAt * 1000).toLocaleDateString()} ·{' '}
+                    {o.playcount.toLocaleString()} plays
                   </span>
                 </li>
               ))}
@@ -423,17 +486,56 @@ function LibraryPanel({ summary }: { summary: LibrarySummary | null }) {
           {formatDate(summary.firstScrobble)} → {formatDate(summary.lastScrobble)}
         </div>
       </div>
-      {summary.topArtists.length > 0 && (
-        <>
-          <h3>Top artists</h3>
-          <ol>
-            {summary.topArtists.map((a) => (
-              <li key={a.name}>
-                {a.name} <span className="hint">({a.playcount.toLocaleString()})</span>
-              </li>
-            ))}
-          </ol>
-        </>
+    </section>
+  );
+}
+
+const TOP_ARTISTS_RANGE_LABELS: Record<TopArtistsRange, string> = {
+  all: 'all time',
+  week: 'last week',
+  month: 'last month',
+  year: 'last year',
+};
+
+function TopArtistsPanel({ defaultService }: { defaultService: ServiceName | null }) {
+  const [range, setRange] = useState<TopArtistsRange>('all');
+  const [data, setData] = useState<TopArtists | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getTopArtists(range)
+      .then((d) => !cancelled && setData(d))
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : String(err)));
+    return () => {
+      cancelled = true;
+    };
+  }, [range]);
+
+  return (
+    <section className="panel">
+      <div className="results-head">
+        <h2>Top artists</h2>
+        <select value={range} onChange={(e) => setRange(e.target.value as TopArtistsRange)}>
+          {(Object.keys(TOP_ARTISTS_RANGE_LABELS) as TopArtistsRange[]).map((r) => (
+            <option key={r} value={r}>
+              {TOP_ARTISTS_RANGE_LABELS[r]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {data && data.artists.length === 0 && <p className="hint">No plays in this range yet.</p>}
+      {data && data.artists.length > 0 && (
+        <ol>
+          {data.artists.map((a) => (
+            <li key={a.name}>
+              <EntityLink name={a.name} artistName={null} spotifyUrl={a.spotifyUrl} tidalUrl={a.tidalUrl} defaultService={defaultService} />{' '}
+              <span className="hint">({a.playcount.toLocaleString()})</span>
+            </li>
+          ))}
+        </ol>
       )}
     </section>
   );
@@ -504,8 +606,9 @@ function Dashboard() {
           <ConnectionsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
         )}
         <LibraryPanel summary={summary} />
+        <TopArtistsPanel defaultService={settings?.defaultService ?? null} />
         {summary && <TastePanel summary={summary} />}
-        <InsightsPanel />
+        <InsightsPanel defaultService={settings?.defaultService ?? null} />
       </div>
     </>
   );

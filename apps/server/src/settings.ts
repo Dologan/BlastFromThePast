@@ -6,6 +6,8 @@ export const SETTING_KEYS = {
   spotifyClientId: 'spotify.clientId',
   tidalClientId: 'tidal.clientId',
   tidalCountryCode: 'tidal.countryCode',
+  /** Which service deep links (Insights, Top artists) should point at. */
+  defaultService: 'defaultService',
 } as const;
 
 /**

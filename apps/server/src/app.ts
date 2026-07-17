@@ -17,8 +17,15 @@ import { pushPlaylist, type PushResult } from './match/push.js';
 import { ServiceMatcher } from './match/matcher.js';
 import { importSpotifyLiked } from './sync/spotifyLiked.js';
 import { getSetting, getStoredSetting, setSetting, SETTING_KEYS } from './settings.js';
-import { computeGaps, computeNeglected, type InsightKind } from './stats/insights.js';
-import { PRESETS, type Recipe, type ServiceConnector, type ServiceName } from '@bftp/core';
+import { computeGaps, computeNeglectedGems, computeOnThisDay, type InsightKind } from './stats/insights.js';
+import {
+  PRESETS,
+  spotifySearchUrl,
+  tidalSearchUrl,
+  type Recipe,
+  type ServiceConnector,
+  type ServiceName,
+} from '@bftp/core';
 import path from 'node:path';
 
 const MB_USER_AGENT =
@@ -81,6 +88,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       spotifyClientId: getStoredSetting(handle, SETTING_KEYS.spotifyClientId) || null,
       tidalClientId: getStoredSetting(handle, SETTING_KEYS.tidalClientId) || null,
       tidalCountryCode: getSetting(handle, SETTING_KEYS.tidalCountryCode) ?? 'US',
+      defaultService: (getSetting(handle, SETTING_KEYS.defaultService) as ServiceName | undefined) ?? null,
     };
   });
 
@@ -91,6 +99,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       spotifyClientId?: string;
       tidalClientId?: string;
       tidalCountryCode?: string;
+      defaultService?: string;
     };
     if (body.lastfmUsername !== undefined) {
       setSetting(handle, SETTING_KEYS.lastfmUsername, body.lastfmUsername.trim());
@@ -106,6 +115,12 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     }
     if (body.tidalCountryCode !== undefined) {
       setSetting(handle, SETTING_KEYS.tidalCountryCode, body.tidalCountryCode.trim().toUpperCase());
+    }
+    if (body.defaultService !== undefined) {
+      if (body.defaultService && !parseService(body.defaultService)) {
+        return reply.code(400).send({ error: 'defaultService must be spotify or tidal.' });
+      }
+      setSetting(handle, SETTING_KEYS.defaultService, body.defaultService);
     }
     reply.code(204);
   });
@@ -168,13 +183,6 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         (SELECT COUNT(*) FROM liked_tracks) AS liked,
         (SELECT MIN(uts) FROM scrobbles) AS firstScrobble,
         (SELECT MAX(uts) FROM scrobbles) AS lastScrobble`);
-    const topArtists = handle.sqlite
-      .prepare(
-        `SELECT a.name, s.playcount
-         FROM artist_stats s JOIN artists a ON a.id = s.artist_id
-         ORDER BY s.playcount DESC LIMIT 10`,
-      )
-      .all();
 
     const enrichment = one(`SELECT
         (SELECT COUNT(*) FROM artists WHERE enrich_status = 'done') AS enriched,
@@ -212,21 +220,63 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       )
       .all();
 
-    return { ...counts, topArtists, enrichment, cache, topGenres, topCountries };
+    return { ...counts, enrichment, cache, topGenres, topCountries };
+  });
+
+  const TOP_ARTISTS_RANGE_DAYS: Record<string, number | null> = { all: null, week: 7, month: 30, year: 365 };
+
+  app.get('/api/library/top-artists', async (req, reply) => {
+    const q = req.query as { range?: string; limit?: string };
+    const range = q.range ?? 'all';
+    if (!(range in TOP_ARTISTS_RANGE_DAYS)) {
+      return reply.code(400).send({ error: 'range must be one of: all, week, month, year.' });
+    }
+    const limit = Math.min(50, Math.max(1, Number(q.limit) || 10));
+    const rangeDays = TOP_ARTISTS_RANGE_DAYS[range]!;
+
+    const rows =
+      rangeDays === null
+        ? (handle.sqlite
+            .prepare(
+              `SELECT a.name AS name, s.playcount AS playcount
+               FROM artist_stats s JOIN artists a ON a.id = s.artist_id
+               ORDER BY s.playcount DESC LIMIT ?`,
+            )
+            .all(limit) as { name: string; playcount: number }[])
+        : (handle.sqlite
+            .prepare(
+              `SELECT a.name AS name, COUNT(*) AS playcount
+               FROM scrobbles s
+               JOIN tracks t ON t.id = s.track_id
+               JOIN artists a ON a.id = t.artist_id
+               WHERE s.uts >= ?
+               GROUP BY t.artist_id
+               ORDER BY playcount DESC LIMIT ?`,
+            )
+            .all(Math.floor(Date.now() / 1000) - rangeDays * 86400, limit) as { name: string; playcount: number }[]);
+
+    const artists = rows.map((r) => ({
+      name: r.name,
+      playcount: r.playcount,
+      spotifyUrl: spotifySearchUrl(r.name, 'artist'),
+      tidalUrl: tidalSearchUrl(r.name, 'artist'),
+    }));
+    return { range, limit, artists };
   });
 
   app.get('/api/library/insights', async (req, reply) => {
-    const q = req.query as { kind?: string; days?: string };
+    const q = req.query as { kind?: string; limit?: string };
     if (q.kind && q.kind !== 'tracks' && q.kind !== 'albums' && q.kind !== 'artists') {
       return reply.code(400).send({ error: 'kind must be tracks, albums or artists.' });
     }
     const kind: InsightKind = (q.kind as InsightKind) ?? 'tracks';
-    const days = Math.max(1, Number(q.days) || 90);
+    const limit = Math.min(50, Math.max(1, Number(q.limit) || 10));
     return {
       kind,
-      days,
-      gaps: computeGaps(handle.sqlite, kind),
-      neglected: computeNeglected(handle.sqlite, kind, days),
+      limit,
+      gaps: computeGaps(handle.sqlite, kind, limit),
+      neglectedGems: computeNeglectedGems(handle.sqlite, kind, limit),
+      onThisDay: computeOnThisDay(handle.sqlite, kind, limit),
     };
   });
 

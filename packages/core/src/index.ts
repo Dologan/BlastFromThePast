@@ -17,6 +17,6 @@ export type {
 } from './recipe.js';
 export { DEFAULT_OUTPUT } from './recipe.js';
 export { GenreResolver, type GenreRule } from './genre.js';
-export { compileRecipe, type CompileContext, type CompiledQuery } from './compile.js';
-export { spotifySearchUrl, tidalSearchUrl, searchQueryFor } from './deeplinks.js';
+export { compileRecipe, dayOfYearUTC, circularDayMatchSql, type CompileContext, type CompiledQuery } from './compile.js';
+export { spotifySearchUrl, tidalSearchUrl, searchQueryFor, type DeepLinkKind } from './deeplinks.js';
 export { PRESETS, type Preset } from './presets.js';

@@ -37,10 +37,23 @@ function toEpoch(date: string, endOfDay = false): number {
 }
 
 /** Day of year (1–366, UTC) for a unix-seconds timestamp. */
-function dayOfYearUTC(seconds: number): number {
+export function dayOfYearUTC(seconds: number): number {
   const d = new Date(seconds * 1000);
   const start = Date.UTC(d.getUTCFullYear(), 0, 0);
   return Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - start) / 86400000);
+}
+
+/**
+ * SQL boolean expression: is the unix-seconds column `col` within `windowDays`
+ * of `today` (a dayOfYearUTC value) on the calendar wheel, in any year?
+ * Shared by the `anniversary` recipe clause and the "on this day" insight so
+ * the two can't drift apart.
+ */
+export function circularDayMatchSql(col: string, today: number, windowDays: number): string {
+  const w = Math.max(0, Math.floor(windowDays));
+  const e = `CAST(strftime('%j', ${col}, 'unixepoch') AS INTEGER)`;
+  // Circular distance on the calendar wheel (handles Dec/Jan wraparound).
+  return `(ABS(${e} - ${today}) <= ${w} OR 366 - ABS(${e} - ${today}) <= ${w})`;
 }
 
 function grainFor(mode: 'tracks' | 'albums'): Grain {
@@ -128,11 +141,13 @@ function compileClause(clause: Clause, g: Grain, ctx: CompileContext, params: un
     }
     case 'genre': {
       const tags = ctx.resolveGenreTags(clause.anyOf, clause.mode ?? 'canonical');
-      if (tags.length === 0) return '0'; // named a genre with no matching tags -> matches nothing
-      return `EXISTS (SELECT 1 FROM artist_tags atg JOIN tags tg ON tg.id = atg.tag_id WHERE atg.artist_id = a.id AND tg.name IN ${inList(
+      // Named a genre with no matching tags -> matches nothing (or everything, negated).
+      if (tags.length === 0) return clause.negate ? '1' : '0';
+      const exists = `EXISTS (SELECT 1 FROM artist_tags atg JOIN tags tg ON tg.id = atg.tag_id WHERE atg.artist_id = a.id AND tg.name IN ${inList(
         tags,
         params,
       )})`;
+      return clause.negate ? `NOT ${exists}` : exists;
     }
     case 'country': {
       if (clause.anyOf.length === 0) return '1';
@@ -146,10 +161,7 @@ function compileClause(clause: Clause, g: Grain, ctx: CompileContext, params: un
     case 'anniversary': {
       const col = clause.field === 'lastListen' ? `${S}.last_listen` : `${S}.first_listen`;
       const today = dayOfYearUTC(ctx.nowSeconds);
-      const w = Math.max(0, Math.floor(clause.windowDays));
-      const e = `CAST(strftime('%j', ${col}, 'unixepoch') AS INTEGER)`;
-      // Circular distance on the calendar wheel (handles Dec/Jan wraparound).
-      return `(ABS(${e} - ${today}) <= ${w} OR 366 - ABS(${e} - ${today}) <= ${w})`;
+      return circularDayMatchSql(col, today, clause.windowDays);
     }
     case 'gapDays': {
       const ongoingDays = `((${ctx.nowSeconds} - ${S}.last_listen) / 86400.0)`;

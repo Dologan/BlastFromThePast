@@ -56,7 +56,7 @@ const CLAUSE_ORDER: ClauseType[] = [
 function defaultClause(type: ClauseType): Clause {
   switch (type) {
     case 'genre':
-      return { type, anyOf: [], mode: 'canonical' };
+      return { type, anyOf: [], mode: 'canonical', negate: false };
     case 'country':
       return { type, anyOf: [], negate: false };
     case 'notPlayedInDays':
@@ -251,6 +251,14 @@ function ClauseEditor({
               onChange={(e) => onChange({ ...clause, mode: e.target.checked ? 'raw' : 'canonical' })}
             />
             exact tag (no subgenres)
+          </label>
+          <label className="inline">
+            <input
+              type="checkbox"
+              checked={clause.negate ?? false}
+              onChange={(e) => onChange({ ...clause, negate: e.target.checked })}
+            />
+            exclude these instead
           </label>
         </>
       );

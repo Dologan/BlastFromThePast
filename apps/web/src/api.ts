@@ -1,14 +1,15 @@
 import type { Recipe } from './recipeTypes';
 
+export type ServiceName = 'spotify' | 'tidal';
+
 export interface Settings {
   lastfmUsername: string | null;
   lastfmApiKeySet: boolean;
   spotifyClientId: string | null;
   tidalClientId: string | null;
   tidalCountryCode: string;
+  defaultService: ServiceName | null;
 }
-
-export type ServiceName = 'spotify' | 'tidal';
 
 export interface AuthStatus {
   spotify: { connected: boolean; clientIdSet: boolean };
@@ -135,7 +136,12 @@ export interface NamedWeight {
 
 export type InsightKind = 'tracks' | 'albums' | 'artists';
 
-export interface GapRow {
+interface DeepLinks {
+  spotifyUrl: string;
+  tidalUrl: string;
+}
+
+export interface GapRow extends DeepLinks {
   entityId: number;
   name: string;
   /** Null for the 'artists' kind, where the entity itself is the artist. */
@@ -146,19 +152,43 @@ export interface GapRow {
   gapSeconds: number;
 }
 
-export interface NeglectedRow {
+export interface NeglectedGemRow extends DeepLinks {
   entityId: number;
   name: string;
   artistName: string | null;
   playcount: number;
   lastListen: number;
+  liked: boolean;
+}
+
+export interface OnThisDayRow extends DeepLinks {
+  entityId: number;
+  name: string;
+  artistName: string | null;
+  playcount: number;
+  matched: 'first' | 'last';
+  matchedAt: number;
 }
 
 export interface Insights {
   kind: InsightKind;
-  days: number;
+  limit: number;
   gaps: GapRow[];
-  neglected: NeglectedRow[];
+  neglectedGems: NeglectedGemRow[];
+  onThisDay: OnThisDayRow[];
+}
+
+export type TopArtistsRange = 'all' | 'week' | 'month' | 'year';
+
+export interface TopArtistRow extends DeepLinks {
+  name: string;
+  playcount: number;
+}
+
+export interface TopArtists {
+  range: TopArtistsRange;
+  limit: number;
+  artists: TopArtistRow[];
 }
 
 export interface LibrarySummary {
@@ -169,7 +199,6 @@ export interface LibrarySummary {
   liked: number;
   firstScrobble: number | null;
   lastScrobble: number | null;
-  topArtists: { name: string; playcount: number }[];
   enrichment: { enriched: number; pending: number; errored: number; withCountry: number };
   cache: { mbSearches: number; mbArtists: number; lastfmTags: number };
   topGenres: NamedWeight[];
@@ -194,6 +223,7 @@ export const api = {
     spotifyClientId?: string;
     tidalClientId?: string;
     tidalCountryCode?: string;
+    defaultService?: string;
   }) =>
     request<void>('/api/settings', {
       method: 'PUT',
@@ -210,8 +240,10 @@ export const api = {
     }),
   getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
   getLibrarySummary: () => request<LibrarySummary>('/api/library/summary'),
-  getInsights: (kind: InsightKind, days: number) =>
-    request<Insights>(`/api/library/insights?kind=${kind}&days=${days}`),
+  getInsights: (kind: InsightKind, limit: number) =>
+    request<Insights>(`/api/library/insights?kind=${kind}&limit=${limit}`),
+  getTopArtists: (range: TopArtistsRange, limit = 10) =>
+    request<TopArtists>(`/api/library/top-artists?range=${range}&limit=${limit}`),
 
   getFacets: () => request<Facets>('/api/facets'),
   previewRecipe: (recipe: Recipe) =>

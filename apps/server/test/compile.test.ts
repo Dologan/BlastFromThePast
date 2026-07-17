@@ -143,6 +143,14 @@ describe('compileRecipe (executed)', () => {
     expect(rows.map((r) => r.artist_name)).toEqual(['Opeth']);
   });
 
+  it('negated genre excludes the family instead of requiring it', () => {
+    const { rows } = run({
+      filters: [{ type: 'genre', anyOf: ['metal'], negate: true }],
+      output: output(),
+    });
+    expect(rows.map((r) => r.artist_name)).toEqual(['Boygenius']);
+  });
+
   it('filters by country, and by negated country', () => {
     expect(run({ filters: [{ type: 'country', anyOf: ['US'] }], output: output() }).count).toBe(2);
     expect(

@@ -91,8 +91,8 @@ export class RecipeService {
         playcount: r.playcount,
         firstListen: r.first_listen,
         lastListen: r.last_listen,
-        spotifyUrl: spotifySearchUrl(query),
-        tidalUrl: tidalSearchUrl(query),
+        spotifyUrl: spotifySearchUrl(query, r.entity_kind),
+        tidalUrl: tidalSearchUrl(query, r.entity_kind),
       };
     });
     return { matched, rows };

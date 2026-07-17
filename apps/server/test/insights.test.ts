@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { openDb, type DbHandle } from '@bftp/db';
-import { computeGaps, computeNeglected } from '../src/stats/insights.js';
+import { computeGaps, computeNeglectedGems, computeOnThisDay } from '../src/stats/insights.js';
 import { rebuildStats } from '../src/sync/stats.js';
 import { buildApp } from '../src/app.js';
 
 const NOW = 1_800_000_000;
 const DAY = 86400;
+const YEAR = 365 * DAY;
 
-describe('insights: gaps & neglected', () => {
+describe('insights: gaps, neglected gems, on this day', () => {
   let handle: DbHandle;
   afterEach(() => handle.close());
 
@@ -33,6 +34,10 @@ describe('insights: gaps & neglected', () => {
     handle.sqlite
       .prepare('INSERT INTO scrobbles (track_id, album_id, uts) VALUES (?, ?, ?)')
       .run(trackId, albumId ?? null, uts);
+  const like = (trackId: number) =>
+    handle.sqlite
+      .prepare("INSERT INTO liked_tracks (track_id, source, liked_at) VALUES (?, 'lastfm', ?)")
+      .run(trackId, NOW);
 
   beforeEach(() => {
     handle = openDb(':memory:');
@@ -42,22 +47,41 @@ describe('insights: gaps & neglected', () => {
     const a = mkArtist('Opeth');
     // "Ghosted": played a lot, then nothing for 3 years — the biggest ongoing gap.
     const ghosted = mkTrack(a, 'Ghosted');
-    scrobble(ghosted, NOW - 5 * 365 * DAY);
-    scrobble(ghosted, NOW - 5 * 365 * DAY + DAY);
-    scrobble(ghosted, NOW - 3 * 365 * DAY); // last play 3 years ago
+    scrobble(ghosted, NOW - 5 * YEAR);
+    scrobble(ghosted, NOW - 5 * YEAR + DAY);
+    scrobble(ghosted, NOW - 3 * YEAR); // last play 3 years ago
     // "Steady": played weekly, up to recently — tiny ongoing gap.
     const steady = mkTrack(a, 'Steady');
     for (let i = 0; i < 5; i++) scrobble(steady, NOW - i * 7 * DAY);
     // "Once": a single play — must not appear (needs playcount >= 2).
     const once = mkTrack(a, 'Once');
-    scrobble(once, NOW - 4 * 365 * DAY);
+    scrobble(once, NOW - 4 * YEAR);
     rebuildStats(handle.sqlite);
 
     const gaps = computeGaps(handle.sqlite, 'tracks', 15, NOW);
-    expect(gaps[0]!.name).toBe('Ghosted');
-    expect(Math.round(gaps[0]!.gapSeconds / DAY / 365)).toBe(3);
     expect(gaps.map((g) => g.name)).not.toContain('Once');
     expect(gaps.map((g) => g.name)).toContain('Steady');
+    const ghostedRow = gaps.find((g) => g.name === 'Ghosted')!;
+    expect(Math.round(ghostedRow.gapSeconds / DAY / 365)).toBe(3);
+    expect(ghostedRow.spotifyUrl).toContain('tracks');
+    expect(ghostedRow.tidalUrl).toContain('tracks');
+  });
+
+  it('draws the jittered pool only from playcount>=2 entities, deterministic in membership for a small pool', () => {
+    const a = mkArtist('Opeth');
+    const ghosted = mkTrack(a, 'Ghosted');
+    scrobble(ghosted, NOW - 5 * YEAR);
+    scrobble(ghosted, NOW - 3 * YEAR);
+    const steady = mkTrack(a, 'Steady');
+    scrobble(steady, NOW - 2 * YEAR);
+    scrobble(steady, NOW - YEAR);
+    const once = mkTrack(a, 'Once');
+    scrobble(once, NOW - 4 * YEAR);
+    rebuildStats(handle.sqlite);
+
+    // Pool of 2 -> both eligible (playcount>=2) tracks, regardless of jitter order.
+    const gaps = computeGaps(handle.sqlite, 'tracks', 2, NOW, 2);
+    expect(gaps.map((g) => g.name).sort()).toEqual(['Ghosted', 'Steady']);
   });
 
   it('computes album gaps from album-linked scrobbles only', () => {
@@ -89,16 +113,59 @@ describe('insights: gaps & neglected', () => {
     expect(gaps[0]!.artistName).toBeNull();
   });
 
-  it('neglected samples items silent for at least the given window, ignoring recent ones', () => {
-    const a = mkArtist('Opeth');
-    const stale = mkTrack(a, 'Stale');
-    scrobble(stale, NOW - 200 * DAY);
-    const fresh = mkTrack(a, 'Fresh');
-    scrobble(fresh, NOW - 5 * DAY);
+  it('neglected gems: top ~10% by playcount, or liked regardless of playcount, silent 3+ years', () => {
+    const a = mkArtist('Various');
+    // 20 tracks with distinct playcounts 1..20, all silent for 4 years.
+    const tracks: number[] = [];
+    for (let pc = 1; pc <= 20; pc++) {
+      const t = mkTrack(a, `Track${pc}`);
+      for (let i = 0; i < pc; i++) scrobble(t, NOW - 4 * YEAR - i * DAY);
+      tracks.push(t);
+    }
+    // Loved but barely played, also silent long enough -> included regardless of rank.
+    const gem = mkTrack(a, 'LovedButRare');
+    scrobble(gem, NOW - 4 * YEAR);
+    like(gem);
+    // High playcount but played recently -> excluded despite rank (not silent 3y+).
+    const recentFavourite = mkTrack(a, 'RecentFavourite');
+    for (let i = 0; i < 25; i++) scrobble(recentFavourite, NOW - i * DAY);
     rebuildStats(handle.sqlite);
 
-    const neglected = computeNeglected(handle.sqlite, 'tracks', 90, 15, NOW);
-    expect(neglected.map((n) => n.name)).toEqual(['Stale']);
+    const gems = computeNeglectedGems(handle.sqlite, 'tracks', 30, NOW);
+    const names = gems.map((g) => g.name);
+    expect(names).toContain('LovedButRare');
+    expect(names).not.toContain('RecentFavourite');
+    expect(names).toContain('Track20'); // clearly top-ranked by playcount
+    expect(names).not.toContain('Track5'); // mid-pack, not in the top ~10% and not liked
+    const lovedRow = gems.find((g) => g.name === 'LovedButRare')!;
+    expect(lovedRow.liked).toBe(true);
+    const topRow = gems.find((g) => g.name === 'Track20')!;
+    expect(topRow.liked).toBe(false);
+  });
+
+  it('on this day: first/last listens landing on today\'s calendar date in a past year, excluding this year', () => {
+    const a = mkArtist('Opeth');
+    const nowDate = new Date(NOW * 1000);
+    const pastSameDay = Math.floor(
+      Date.UTC(nowDate.getUTCFullYear() - 2, nowDate.getUTCMonth(), nowDate.getUTCDate(), 12) / 1000,
+    );
+    const thisYearSameDay = Math.floor(
+      Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), nowDate.getUTCDate(), 12) / 1000,
+    );
+
+    const anniv = mkTrack(a, 'Anniversary');
+    scrobble(anniv, pastSameDay); // only listen, exactly 2 years ago today
+
+    const today = mkTrack(a, 'JustToday');
+    scrobble(today, thisYearSameDay); // this year -> excluded
+
+    const offDay = mkTrack(a, 'OffDay');
+    scrobble(offDay, pastSameDay - 30 * DAY); // a month off -> excluded
+    rebuildStats(handle.sqlite);
+
+    const rows = computeOnThisDay(handle.sqlite, 'tracks', 10, NOW);
+    expect(rows.map((r) => r.name)).toEqual(['Anniversary']);
+    expect(rows[0]!.matched).toBe('first');
   });
 
   it('is served by /api/library/insights, including the artists kind', async () => {
@@ -109,13 +176,14 @@ describe('insights: gaps & neglected', () => {
     rebuildStats(handle.sqlite);
 
     const app = buildApp({ handle });
-    const res = await app.inject({ method: 'GET', url: '/api/library/insights?kind=tracks&days=365' });
+    const res = await app.inject({ method: 'GET', url: '/api/library/insights?kind=tracks&limit=5' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.kind).toBe('tracks');
-    expect(body.days).toBe(365);
+    expect(body.limit).toBe(5);
     expect(body.gaps[0].name).toBe('Harvest');
-    expect(Array.isArray(body.neglected)).toBe(true);
+    expect(Array.isArray(body.neglectedGems)).toBe(true);
+    expect(Array.isArray(body.onThisDay)).toBe(true);
 
     const artists = await app.inject({ method: 'GET', url: '/api/library/insights?kind=artists' });
     expect(artists.statusCode).toBe(200);

@@ -48,4 +48,25 @@ describe('bundled client-ID defaults', () => {
     expect(settings.tidalClientId).toBeNull();
     await app.close();
   });
+
+  it('defaultService defaults to null, can be set, and rejects an unknown service', async () => {
+    handle = openDb(':memory:');
+    const app = buildApp({ handle });
+
+    let settings = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    expect(settings.defaultService).toBeNull();
+
+    const bad = await app.inject({ method: 'PUT', url: '/api/settings', payload: { defaultService: 'napster' } });
+    expect(bad.statusCode).toBe(400);
+
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { defaultService: 'tidal' } });
+    settings = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    expect(settings.defaultService).toBe('tidal');
+
+    // Clearing it (empty string) restores null.
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { defaultService: '' } });
+    settings = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    expect(settings.defaultService).toBeNull();
+    await app.close();
+  });
 });

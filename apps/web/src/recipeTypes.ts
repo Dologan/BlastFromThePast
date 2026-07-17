@@ -15,7 +15,7 @@ export type Clause =
   | { type: 'playedInDays'; days: number }
   | { type: 'playcount'; min?: number; max?: number }
   | { type: 'loved'; source?: 'lastfm' | 'spotify' }
-  | { type: 'genre'; anyOf: string[]; mode?: 'canonical' | 'raw' }
+  | { type: 'genre'; anyOf: string[]; mode?: 'canonical' | 'raw'; negate?: boolean }
   | { type: 'country'; anyOf: string[]; negate?: boolean }
   | { type: 'excludeRecentlyPlaylisted'; days: number }
   | { type: 'anniversary'; field?: 'firstListen' | 'lastListen'; windowDays: number }
