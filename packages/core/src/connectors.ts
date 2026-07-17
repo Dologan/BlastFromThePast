@@ -16,10 +16,30 @@ export interface ServiceTrack {
   durationMs?: number;
 }
 
+export interface ServiceAlbum {
+  serviceId: string;
+  name: string;
+  artistName: string;
+}
+
+export interface ServiceArtist {
+  serviceId: string;
+  name: string;
+}
+
 export interface TrackQuery {
   isrc?: string;
   artistName: string;
   trackName: string;
+}
+
+export interface AlbumQuery {
+  artistName: string;
+  albumName: string;
+}
+
+export interface ArtistQuery {
+  artistName: string;
 }
 
 export interface ServiceConnector {
@@ -27,6 +47,11 @@ export interface ServiceConnector {
   /** True once OAuth tokens are stored and valid/refreshable. */
   isAuthorized(): Promise<boolean>;
   searchTrack(query: TrackQuery): Promise<ServiceTrack[]>;
+  /** Optional: not every connector implementation needs album/artist resolution
+   * (e.g. push only ever matches tracks). Used to resolve a direct deep link
+   * for library albums/artists instead of falling back to a search URL. */
+  searchAlbum?(query: AlbumQuery): Promise<ServiceAlbum[]>;
+  searchArtist?(query: ArtistQuery): Promise<ServiceArtist[]>;
   createPlaylist(name: string, description: string): Promise<string>;
   /** Adds tracks to a playlist. Some implementations (Spotify) fully replace the
    * contents when called on an empty/fresh playlist; see `clearPlaylist`. */
@@ -41,5 +66,6 @@ export interface ServiceConnector {
   getLikedTracks?(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }>;
   deepLinkTrack(serviceId: string): string;
   deepLinkAlbum(serviceAlbumId: string): string;
+  deepLinkArtist(serviceArtistId: string): string;
   deepLinkPlaylist(servicePlaylistId: string): string;
 }

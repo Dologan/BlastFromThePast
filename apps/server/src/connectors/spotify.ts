@@ -1,4 +1,4 @@
-import type { ServiceConnector, ServiceTrack, TrackQuery } from '@bftp/core';
+import type { AlbumQuery, ArtistQuery, ServiceAlbum, ServiceArtist, ServiceConnector, ServiceTrack, TrackQuery } from '@bftp/core';
 import { SERVICE_CONFIG } from '../auth/serviceConfig.js';
 import { authedJson, chunk, type ConnectorFetch } from './http.js';
 
@@ -36,6 +36,24 @@ export class SpotifyConnector implements ServiceConnector {
     const url = `${API}/search?type=track&limit=5&q=${encodeURIComponent(q)}`;
     const data = await authedJson(this.fetchImpl, this.getToken, 'GET', url);
     return (data?.tracks?.items ?? []).map(toServiceTrack);
+  }
+
+  async searchAlbum(query: AlbumQuery): Promise<ServiceAlbum[]> {
+    const q = `album:${query.albumName} artist:${query.artistName}`;
+    const url = `${API}/search?type=album&limit=5&q=${encodeURIComponent(q)}`;
+    const data = await authedJson(this.fetchImpl, this.getToken, 'GET', url);
+    return (data?.albums?.items ?? []).map((item: any) => ({
+      serviceId: String(item.id),
+      name: item.name,
+      artistName: item.artists?.[0]?.name ?? '',
+    }));
+  }
+
+  async searchArtist(query: ArtistQuery): Promise<ServiceArtist[]> {
+    const q = `artist:${query.artistName}`;
+    const url = `${API}/search?type=artist&limit=5&q=${encodeURIComponent(q)}`;
+    const data = await authedJson(this.fetchImpl, this.getToken, 'GET', url);
+    return (data?.artists?.items ?? []).map((item: any) => ({ serviceId: String(item.id), name: item.name }));
   }
 
   async createPlaylist(name: string, description: string): Promise<string> {
@@ -100,6 +118,10 @@ export class SpotifyConnector implements ServiceConnector {
 
   deepLinkAlbum(serviceAlbumId: string): string {
     return `https://open.spotify.com/album/${serviceAlbumId}`;
+  }
+
+  deepLinkArtist(serviceArtistId: string): string {
+    return `https://open.spotify.com/artist/${serviceArtistId}`;
   }
 
   deepLinkPlaylist(servicePlaylistId: string): string {

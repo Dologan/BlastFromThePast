@@ -35,6 +35,9 @@ class FakeConnector implements ServiceConnector {
   deepLinkAlbum(id: string) {
     return `https://open.spotify.com/album/${id}`;
   }
+  deepLinkArtist(id: string) {
+    return `https://open.spotify.com/artist/${id}`;
+  }
   deepLinkPlaylist(id: string) {
     return `https://open.spotify.com/playlist/${id}`;
   }

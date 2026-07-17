@@ -1,4 +1,4 @@
-import type { ServiceConnector, ServiceTrack, TrackQuery } from '@bftp/core';
+import type { AlbumQuery, ArtistQuery, ServiceAlbum, ServiceArtist, ServiceConnector, ServiceTrack, TrackQuery } from '@bftp/core';
 import { SERVICE_CONFIG } from '../auth/serviceConfig.js';
 import { ConnectorError, type ConnectorFetch } from './http.js';
 
@@ -74,6 +74,32 @@ export class TidalConnector implements ServiceConnector {
       });
   }
 
+  async searchAlbum(query: AlbumQuery): Promise<ServiceAlbum[]> {
+    const term = `${query.artistName} ${query.albumName}`;
+    const data = await this.request('GET', `/searchResults/${encodeURIComponent(term)}?include=albums`);
+    const included: any[] = data?.included ?? [];
+    const artistsById = new Map<string, string>();
+    for (const r of included) if (r?.type === 'artists') artistsById.set(r.id, r.attributes?.name ?? '');
+    return included
+      .filter((r) => r?.type === 'albums')
+      .map((r) => {
+        const artistRef = r.relationships?.artists?.data?.[0]?.id;
+        return {
+          serviceId: String(r.id),
+          name: r.attributes?.title ?? '',
+          artistName: (artistRef && artistsById.get(artistRef)) || query.artistName,
+        } satisfies ServiceAlbum;
+      });
+  }
+
+  async searchArtist(query: ArtistQuery): Promise<ServiceArtist[]> {
+    const data = await this.request('GET', `/searchResults/${encodeURIComponent(query.artistName)}?include=artists`);
+    const included: any[] = data?.included ?? [];
+    return included
+      .filter((r) => r?.type === 'artists')
+      .map((r) => ({ serviceId: String(r.id), name: r.attributes?.name ?? '' }) satisfies ServiceArtist);
+  }
+
   async createPlaylist(name: string, description: string): Promise<string> {
     const data = await this.request('POST', '/playlists', {
       data: { type: 'playlists', attributes: { name, description, accessType: 'UNLISTED' } },
@@ -121,6 +147,10 @@ export class TidalConnector implements ServiceConnector {
 
   deepLinkAlbum(serviceAlbumId: string): string {
     return `https://tidal.com/browse/album/${serviceAlbumId}`;
+  }
+
+  deepLinkArtist(serviceArtistId: string): string {
+    return `https://tidal.com/browse/artist/${serviceArtistId}`;
   }
 
   deepLinkPlaylist(servicePlaylistId: string): string {

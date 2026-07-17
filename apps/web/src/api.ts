@@ -136,6 +136,13 @@ export interface NamedWeight {
 
 export type InsightKind = 'tracks' | 'albums' | 'artists';
 
+/** Singular per-entity kind, as used by resolveDeepLinks (vs InsightKind's plural). */
+export type LinkEntityKind = 'track' | 'album' | 'artist';
+
+export function insightKindToLinkKind(kind: InsightKind): LinkEntityKind {
+  return kind === 'tracks' ? 'track' : kind === 'albums' ? 'album' : 'artist';
+}
+
 interface DeepLinks {
   spotifyUrl: string;
   tidalUrl: string;
@@ -181,6 +188,7 @@ export interface Insights {
 export type TopArtistsRange = 'all' | 'week' | 'month' | 'year';
 
 export interface TopArtistRow extends DeepLinks {
+  entityId: number;
   name: string;
   playcount: number;
 }
@@ -300,5 +308,12 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ service, trackId, serviceId }),
+    }),
+
+  resolveDeepLinks: (service: ServiceName, items: { kind: LinkEntityKind; entityId: number }[]) =>
+    request<{ links: (string | null)[] }>('/api/deeplinks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service, items }),
     }),
 };

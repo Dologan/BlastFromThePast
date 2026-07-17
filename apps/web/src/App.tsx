@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   api,
+  insightKindToLinkKind,
   type AuthStatus,
   type Insights,
   type InsightKind,
   type LibrarySummary,
+  type LinkEntityKind,
   type ServiceName,
   type Settings,
   type SyncStatus,
@@ -313,20 +315,62 @@ function formatDuration(seconds: number): string {
   return `${Math.round(days)} days`;
 }
 
+/**
+ * Resolves a batch of library entities to direct deep links on `defaultService`
+ * (falling back silently to nothing if unresolved/not connected — callers
+ * already have a search-URL fallback). Cached server-side via service_links,
+ * so repeat lookups for the same entities are effectively free.
+ */
+function useResolvedLinks(defaultService: ServiceName | null, items: { kind: LinkEntityKind; entityId: number }[]) {
+  const [links, setLinks] = useState<Record<string, string>>({});
+  const key = items.map((i) => `${i.kind}:${i.entityId}`).join(',');
+
+  useEffect(() => {
+    if (!defaultService || items.length === 0) {
+      setLinks({});
+      return;
+    }
+    let cancelled = false;
+    api
+      .resolveDeepLinks(defaultService, items)
+      .then(({ links: resolved }) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        items.forEach((it, i) => {
+          const url = resolved[i];
+          if (url) map[`${it.kind}:${it.entityId}`] = url;
+        });
+        setLinks(map);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // `key` is a content-based proxy for `items`, so this only re-runs when the actual entity set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultService, key]);
+
+  return links;
+}
+
 function EntityLink({
   name,
   artistName,
   spotifyUrl,
   tidalUrl,
   defaultService,
+  resolvedUrl,
 }: {
   name: string;
   artistName: string | null;
   spotifyUrl: string;
   tidalUrl: string;
   defaultService: ServiceName | null;
+  /** A resolved direct-entry link, if available; takes priority over the search-URL fallback. */
+  resolvedUrl?: string;
 }) {
-  const url = defaultService === 'spotify' ? spotifyUrl : defaultService === 'tidal' ? tidalUrl : null;
+  const fallback = defaultService === 'spotify' ? spotifyUrl : defaultService === 'tidal' ? tidalUrl : null;
+  const url = resolvedUrl ?? fallback;
   const label = (
     <>
       <strong>{name}</strong> {artistName && <span className="hint">— {artistName}</span>}
@@ -371,6 +415,20 @@ function InsightsPanel({ defaultService }: { defaultService: ServiceName | null 
     };
   }, [kind, limit, shuffleKey]);
 
+  const linkKind = insightKindToLinkKind(kind);
+  const linkItems = data
+    ? Array.from(
+        new Map(
+          [...data.gaps, ...data.neglectedGems, ...data.onThisDay].map((r) => [
+            `${linkKind}:${r.entityId}`,
+            { kind: linkKind, entityId: r.entityId },
+          ]),
+        ).values(),
+      )
+    : [];
+  const resolved = useResolvedLinks(defaultService, linkItems);
+  const linkFor = (entityId: number) => resolved[`${linkKind}:${entityId}`];
+
   return (
     <section className="panel">
       <div className="results-head">
@@ -411,7 +469,14 @@ function InsightsPanel({ defaultService }: { defaultService: ServiceName | null 
             <ol className="insight-list">
               {data.gaps.map((g) => (
                 <li key={g.entityId}>
-                  <EntityLink name={g.name} artistName={g.artistName} spotifyUrl={g.spotifyUrl} tidalUrl={g.tidalUrl} defaultService={defaultService} />
+                  <EntityLink
+                    name={g.name}
+                    artistName={g.artistName}
+                    spotifyUrl={g.spotifyUrl}
+                    tidalUrl={g.tidalUrl}
+                    defaultService={defaultService}
+                    resolvedUrl={linkFor(g.entityId)}
+                  />
                   <span className="hint">
                     silent for {formatDuration(g.gapSeconds)} · {g.playcount.toLocaleString()} plays before that
                   </span>
@@ -429,7 +494,14 @@ function InsightsPanel({ defaultService }: { defaultService: ServiceName | null 
             <ol className="insight-list">
               {data.neglectedGems.map((n) => (
                 <li key={n.entityId}>
-                  <EntityLink name={n.name} artistName={n.artistName} spotifyUrl={n.spotifyUrl} tidalUrl={n.tidalUrl} defaultService={defaultService} />
+                  <EntityLink
+                    name={n.name}
+                    artistName={n.artistName}
+                    spotifyUrl={n.spotifyUrl}
+                    tidalUrl={n.tidalUrl}
+                    defaultService={defaultService}
+                    resolvedUrl={linkFor(n.entityId)}
+                  />
                   <span className="hint">
                     {n.liked && '♥ · '}last played {new Date(n.lastListen * 1000).toLocaleDateString()} ·{' '}
                     {n.playcount.toLocaleString()} plays
@@ -446,7 +518,14 @@ function InsightsPanel({ defaultService }: { defaultService: ServiceName | null 
             <ol className="insight-list">
               {data.onThisDay.map((o) => (
                 <li key={o.entityId}>
-                  <EntityLink name={o.name} artistName={o.artistName} spotifyUrl={o.spotifyUrl} tidalUrl={o.tidalUrl} defaultService={defaultService} />
+                  <EntityLink
+                    name={o.name}
+                    artistName={o.artistName}
+                    spotifyUrl={o.spotifyUrl}
+                    tidalUrl={o.tidalUrl}
+                    defaultService={defaultService}
+                    resolvedUrl={linkFor(o.entityId)}
+                  />
                   <span className="hint">
                     {o.matched === 'first' ? 'first' : 'last'} played {new Date(o.matchedAt * 1000).toLocaleDateString()} ·{' '}
                     {o.playcount.toLocaleString()} plays
@@ -513,6 +592,9 @@ function TopArtistsPanel({ defaultService }: { defaultService: ServiceName | nul
     };
   }, [range]);
 
+  const linkItems = data ? data.artists.map((a) => ({ kind: 'artist' as const, entityId: a.entityId })) : [];
+  const resolved = useResolvedLinks(defaultService, linkItems);
+
   return (
     <section className="panel">
       <div className="results-head">
@@ -530,8 +612,15 @@ function TopArtistsPanel({ defaultService }: { defaultService: ServiceName | nul
       {data && data.artists.length > 0 && (
         <ol>
           {data.artists.map((a) => (
-            <li key={a.name}>
-              <EntityLink name={a.name} artistName={null} spotifyUrl={a.spotifyUrl} tidalUrl={a.tidalUrl} defaultService={defaultService} />{' '}
+            <li key={a.entityId}>
+              <EntityLink
+                name={a.name}
+                artistName={null}
+                spotifyUrl={a.spotifyUrl}
+                tidalUrl={a.tidalUrl}
+                defaultService={defaultService}
+                resolvedUrl={resolved[`artist:${a.entityId}`]}
+              />{' '}
               <span className="hint">({a.playcount.toLocaleString()})</span>
             </li>
           ))}

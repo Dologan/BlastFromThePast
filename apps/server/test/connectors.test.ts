@@ -97,6 +97,23 @@ describe('SpotifyConnector', () => {
     expect(calls[0]!.method).toBe('PUT');
     expect(JSON.parse(calls[0]!.body!).uris).toEqual([]);
   });
+
+  it('searches albums and artists, and builds their deep links', async () => {
+    const { fetchImpl, calls } = recorder((url) =>
+      url.includes('type=album')
+        ? { albums: { items: [{ id: 'al1', name: 'Ghost Reveries', artists: [{ name: 'Opeth' }] }] } }
+        : { artists: { items: [{ id: 'ar1', name: 'Opeth' }] } },
+    );
+    const c = new SpotifyConnector(token, () => true, fetchImpl);
+    const albums = await c.searchAlbum!({ artistName: 'Opeth', albumName: 'Ghost Reveries' });
+    expect(albums[0]).toEqual({ serviceId: 'al1', name: 'Ghost Reveries', artistName: 'Opeth' });
+    expect(calls[0]!.url).toContain(encodeURIComponent('album:Ghost Reveries artist:Opeth'));
+
+    const artists = await c.searchArtist!({ artistName: 'Opeth' });
+    expect(artists[0]).toEqual({ serviceId: 'ar1', name: 'Opeth' });
+
+    expect(c.deepLinkArtist('ar1')).toBe('https://open.spotify.com/artist/ar1');
+  });
 });
 
 describe('TidalConnector', () => {
@@ -179,5 +196,29 @@ describe('TidalConnector', () => {
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
     await c.clearPlaylist('tpl1');
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('searches albums and artists via included resources, and builds their deep links', async () => {
+    const { fetchImpl, calls } = recorder((url) => {
+      if (url.includes('include=albums')) {
+        return {
+          included: [
+            { type: 'artists', id: 'a1', attributes: { name: 'Opeth' } },
+            { type: 'albums', id: 'al1', attributes: { title: 'Ghost Reveries' }, relationships: { artists: { data: [{ id: 'a1' }] } } },
+          ],
+        };
+      }
+      return { included: [{ type: 'artists', id: 'a1', attributes: { name: 'Opeth' } }] };
+    });
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+
+    const albums = await c.searchAlbum!({ artistName: 'Opeth', albumName: 'Ghost Reveries' });
+    expect(albums[0]).toEqual({ serviceId: 'al1', name: 'Ghost Reveries', artistName: 'Opeth' });
+    expect(calls[0]!.url).toContain('include=albums');
+
+    const artists = await c.searchArtist!({ artistName: 'Opeth' });
+    expect(artists[0]).toEqual({ serviceId: 'a1', name: 'Opeth' });
+
+    expect(c.deepLinkArtist('a1')).toBe('https://tidal.com/browse/artist/a1');
   });
 });

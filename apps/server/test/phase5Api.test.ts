@@ -25,6 +25,9 @@ class FakeConnector implements ServiceConnector {
   deepLinkAlbum(id: string) {
     return id;
   }
+  deepLinkArtist(id: string) {
+    return id;
+  }
   deepLinkPlaylist(id: string) {
     return id;
   }

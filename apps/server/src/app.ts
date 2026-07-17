@@ -15,6 +15,7 @@ import { SpotifyConnector } from './connectors/spotify.js';
 import { TidalConnector } from './connectors/tidal.js';
 import { pushPlaylist, type PushResult } from './match/push.js';
 import { ServiceMatcher } from './match/matcher.js';
+import { resolveDeepLink, type LinkEntityKind } from './match/entityLinks.js';
 import { importSpotifyLiked } from './sync/spotifyLiked.js';
 import { getSetting, getStoredSetting, setSetting, SETTING_KEYS } from './settings.js';
 import { computeGaps, computeNeglectedGems, computeOnThisDay, type InsightKind } from './stats/insights.js';
@@ -238,14 +239,14 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       rangeDays === null
         ? (handle.sqlite
             .prepare(
-              `SELECT a.name AS name, s.playcount AS playcount
+              `SELECT a.id AS entityId, a.name AS name, s.playcount AS playcount
                FROM artist_stats s JOIN artists a ON a.id = s.artist_id
                ORDER BY s.playcount DESC LIMIT ?`,
             )
-            .all(limit) as { name: string; playcount: number }[])
+            .all(limit) as { entityId: number; name: string; playcount: number }[])
         : (handle.sqlite
             .prepare(
-              `SELECT a.name AS name, COUNT(*) AS playcount
+              `SELECT a.id AS entityId, a.name AS name, COUNT(*) AS playcount
                FROM scrobbles s
                JOIN tracks t ON t.id = s.track_id
                JOIN artists a ON a.id = t.artist_id
@@ -253,9 +254,10 @@ export function buildApp(opts: AppOptions): FastifyInstance {
                GROUP BY t.artist_id
                ORDER BY playcount DESC LIMIT ?`,
             )
-            .all(Math.floor(Date.now() / 1000) - rangeDays * 86400, limit) as { name: string; playcount: number }[]);
+            .all(Math.floor(Date.now() / 1000) - rangeDays * 86400, limit) as { entityId: number; name: string; playcount: number }[]);
 
     const artists = rows.map((r) => ({
+      entityId: r.entityId,
       name: r.name,
       playcount: r.playcount,
       spotifyUrl: spotifySearchUrl(r.name, 'artist'),
@@ -440,6 +442,38 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     }
     new ServiceMatcher(handle, makeConnector(service), service).setOverride(body.trackId, body.serviceId);
     reply.code(204);
+  });
+
+  // ---- Deep links (Insights / Top artists -> resolved streaming-service entries) ----
+
+  const DEEP_LINK_KINDS: LinkEntityKind[] = ['track', 'album', 'artist'];
+  const DEEP_LINK_CONCURRENCY = 4;
+
+  app.post('/api/deeplinks', async (req, reply) => {
+    const body = req.body as { service?: string; items?: { kind?: string; entityId?: number }[] };
+    const service = body.service ? parseService(body.service) : null;
+    if (!service) return reply.code(400).send({ error: 'A valid service is required.' });
+    const items = body.items ?? [];
+    const links: (string | null)[] = new Array(items.length).fill(null);
+
+    if (auth.isAuthorized(service)) {
+      const connector = makeConnector(service);
+      let next = 0;
+      const worker = async () => {
+        while (next < items.length) {
+          const i = next++;
+          const item = items[i];
+          if (!item || !DEEP_LINK_KINDS.includes(item.kind as LinkEntityKind) || !item.entityId) continue;
+          try {
+            links[i] = await resolveDeepLink(handle, connector, service, item.kind as LinkEntityKind, item.entityId);
+          } catch {
+            links[i] = null; // best-effort: a lookup failure just falls back to search on the client
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(DEEP_LINK_CONCURRENCY, items.length) }, worker));
+    }
+    return { links };
   });
 
   app.get('/api/presets', async () => PRESETS);

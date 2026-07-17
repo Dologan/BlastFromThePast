@@ -2,7 +2,11 @@ export { normalizeName } from './normalize.js';
 export type {
   ServiceName,
   ServiceTrack,
+  ServiceAlbum,
+  ServiceArtist,
   TrackQuery,
+  AlbumQuery,
+  ArtistQuery,
   ServiceConnector,
 } from './connectors.js';
 export type {
