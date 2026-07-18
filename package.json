@@ -13,7 +13,8 @@
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/server",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspace apps/web"
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspace apps/web",
+    "mcp": "npm run mcp --workspace apps/server"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

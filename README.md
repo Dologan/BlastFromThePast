@@ -121,6 +121,15 @@ also matches `progressive metal`, `djent`, etc. via the seeded (user-editable)
 `genre_rules` table plus a whole-word fallback. Results link straight out to
 Spotify/TIDAL search; Phase 4 upgrades those to exact track matches.
 
+## Voice / natural-language assistant
+
+The recipe engine is exposed to assistant LLMs: an MCP server (`npm run mcp`)
+plus an OpenClaw skill (`skills/blastfromthepast/`) let you say *"create a
+playlist of metal I haven't listened to in 5 years with more than 10 plays"* —
+including by voice from Android Auto or a Wear OS watch via a Telegram-connected
+agent. Setup, network topologies, and the Claude Desktop alternative are in
+[docs/assistant.md](docs/assistant.md).
+
 ## Tests
 
 ```sh

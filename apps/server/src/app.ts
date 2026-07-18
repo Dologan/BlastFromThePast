@@ -48,6 +48,8 @@ export interface AppOptions {
   createConnector?: (service: ServiceName) => ServiceConnector;
   /** OAuth manager override (tests). */
   authManager?: AuthManager;
+  /** How long POST /api/push/sync waits for the push job before returning pending (tests shorten this). */
+  syncPushTimeoutMs?: number;
 }
 
 export function buildApp(opts: AppOptions): FastifyInstance {
@@ -77,6 +79,19 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   let lastPush: PushResult | null = null;
 
   const app = Fastify({ logger: true });
+
+  // Optional bearer-token guard for assistant integrations reaching the API
+  // over the network. Loopback clients (the web SPA, same-host tools) are
+  // always exempt, and nothing is enforced unless a token is configured — so
+  // the default single-host setup behaves exactly as before.
+  const isLoopback = (ip: string) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.raw.url?.startsWith('/api/')) return;
+    const token = process.env.BFTP_API_TOKEN || getSetting(handle, SETTING_KEYS.apiToken);
+    if (!token || isLoopback(req.ip)) return;
+    if (req.headers.authorization === `Bearer ${token}`) return;
+    return reply.code(401).send({ error: 'Unauthorized: a valid bearer token is required for remote API access.' });
+  });
 
   app.get('/api/health', async () => ({ ok: true }));
 
@@ -372,22 +387,28 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     };
   });
 
-  app.post('/api/push', async (req, reply) => {
-    const body = req.body as {
-      recipe?: Recipe;
-      service?: string;
-      name?: string;
-      description?: string;
-      /** Optional subset of preview entity ids (tracks or albums, per mode). */
-      selectedIds?: number[];
-      mode?: 'new' | 'replace' | 'append';
-      existingPlaylistId?: string;
-    };
+  interface PushRequestBody {
+    recipe?: Recipe;
+    service?: string;
+    name?: string;
+    description?: string;
+    /** Optional subset of preview entity ids (tracks or albums, per mode). */
+    selectedIds?: number[];
+    mode?: 'new' | 'replace' | 'append';
+    existingPlaylistId?: string;
+  }
+
+  /** Validates a push request and assembles its track list; shared by the async and sync routes. */
+  const preparePush = (body: PushRequestBody) => {
     const service = body.service ? parseService(body.service) : null;
-    if (!service) return reply.code(400).send({ error: 'A valid service is required.' });
-    if (!body.name?.trim()) return reply.code(400).send({ error: 'A playlist name is required.' });
-    if (!body.recipe) return reply.code(400).send({ error: 'A recipe is required.' });
-    if (!auth.isAuthorized(service)) return reply.code(400).send({ error: `Connect ${service} first.` });
+    if (!service) return { error: 'A valid service is required.' };
+    if (!body.name?.trim()) return { error: 'A playlist name is required.' };
+    if (!body.recipe) return { error: 'A recipe is required.' };
+    if (!auth.isAuthorized(service)) return { error: `Connect ${service} first.` };
+    const mode = body.mode ?? 'new';
+    if (mode !== 'new' && !body.existingPlaylistId) {
+      return { error: 'existingPlaylistId is required for replace/append.' };
+    }
 
     const preview = recipes.preview(body.recipe);
     const selected = body.selectedIds ? new Set(body.selectedIds) : null;
@@ -398,24 +419,58 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       body.recipe.output.mode === 'tracks'
         ? rows.map((r) => ({ trackId: r.entityId, name: r.name, artistName: r.artistName }))
         : rows.flatMap((r) => expandAlbumTracks(r.entityId));
-    if (tracks.length === 0) return reply.code(400).send({ error: 'Nothing selected to push.' });
-    const connector = makeConnector(service);
-    const name = body.name.trim();
-    const description = body.description ?? 'Created by Blast From The Past';
-    const mode = body.mode ?? 'new';
-    if (mode !== 'new' && !body.existingPlaylistId) {
-      return reply.code(400).send({ error: 'existingPlaylistId is required for replace/append.' });
-    }
+    if (tracks.length === 0) return { error: 'Nothing selected to push.' };
 
+    return {
+      service,
+      name: body.name.trim(),
+      description: body.description ?? 'Created by Blast From The Past',
+      mode,
+      existingPlaylistId: body.existingPlaylistId,
+      tracks,
+    };
+  };
+
+  /** Kicks off the push job for a prepared request; false if another job is running. */
+  const startPushJob = (p: Exclude<ReturnType<typeof preparePush>, { error: string }>): boolean => {
+    const connector = makeConnector(p.service);
     lastPush = null;
-    const started = jobs.start('push', async () => {
-      lastPush = await pushPlaylist(handle, connector, service, name, description, tracks, jobs.reportProgress, {
-        mode,
-        existingPlaylistId: body.existingPlaylistId,
+    return jobs.start('push', async () => {
+      lastPush = await pushPlaylist(handle, connector, p.service, p.name, p.description, p.tracks, jobs.reportProgress, {
+        mode: p.mode,
+        existingPlaylistId: p.existingPlaylistId,
       });
     });
-    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
-    return reply.code(202).send({ started: true, trackCount: tracks.length });
+  };
+
+  app.post('/api/push', async (req, reply) => {
+    const prepared = preparePush(req.body as PushRequestBody);
+    if ('error' in prepared) return reply.code(400).send({ error: prepared.error });
+    if (!startPushJob(prepared)) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true, trackCount: prepared.tracks.length });
+  });
+
+  // Synchronous variant for assistants/agents: same body as /api/push, but
+  // waits for the job and returns the full result inline, so a tool call gets
+  // the playlist URL and match stats in one round-trip.
+  const syncPushTimeoutMs = opts.syncPushTimeoutMs ?? 90_000;
+  app.post('/api/push/sync', async (req, reply) => {
+    const prepared = preparePush(req.body as PushRequestBody);
+    if ('error' in prepared) return reply.code(400).send({ error: prepared.error });
+    if (!startPushJob(prepared)) return reply.code(409).send({ error: 'A job is already running.' });
+
+    const deadline = Date.now() + syncPushTimeoutMs;
+    while (jobs.getStatus().running && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const status = jobs.getStatus();
+    if (status.running) {
+      // Still going (big playlist, slow service): the job continues in the
+      // background — the caller can poll GET /api/push/result.
+      return reply.code(202).send({ pending: true, trackCount: prepared.tracks.length });
+    }
+    if (status.error) return reply.code(502).send({ error: status.error });
+    return { result: lastPush, trackCount: prepared.tracks.length };
   });
 
   app.get('/api/push/result', async () => ({ result: lastPush }));

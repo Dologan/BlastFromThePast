@@ -8,6 +8,12 @@ export const SETTING_KEYS = {
   tidalCountryCode: 'tidal.countryCode',
   /** Which service deep links (Insights, Top artists) should point at. */
   defaultService: 'defaultService',
+  /**
+   * Optional bearer token guarding /api/* for non-loopback clients (assistant
+   * integrations reaching the API over the network). Overridable via the
+   * BFTP_API_TOKEN env var; unset = no auth (current single-host behavior).
+   */
+  apiToken: 'api.token',
 } as const;
 
 /**
