@@ -41,6 +41,12 @@ All five build phases complete:
 - [x] Polish: built-in preset recipes, an "on this day" anniversary filter,
       a match fix-up UI (search + manual override for imperfect matches), and
       responsive styling for phone use.
+- [x] Curator tab: bulk-classifies loved/liked tracks and albums into
+      playlists by genre family, with a live preview (counts, samples,
+      per-group/per-track selection) before anything is pushed; a playlist-
+      inventory sync so it knows what's already playlisted on Spotify/TIDAL;
+      and a bulk "unlike" cleanup tool with a per-track protect flag. See
+      [Curator](#curator) below.
 
 ## Running
 
@@ -88,11 +94,16 @@ encrypted (AES-256-GCM) under `data/secret.key`.
 Notes:
 - **Spotify** development mode needs your own Premium account and allows a
   handful of users — fine for personal use.
-- **TIDAL** can't expose your liked *tracks* via its API yet, so liked-track
-  filters are fed from Spotify likes + Last.fm loved tracks. TIDAL's write API
-  is new; the endpoint shapes in `apps/server/src/connectors/tidal.ts` and
-  `auth/serviceConfig.ts` are centralized in case they need adjustment against
-  the live API.
+- **TIDAL** liked tracks: via the `userCollectionTracks` API resource, TIDAL
+  now supports reading and removing your liked tracks (used for TIDAL liked-
+  track import and Curator's bulk unlike) — but not yet *adding* new ones, so
+  "loving" a track only works on Spotify/Last.fm. TIDAL's write API is
+  comparatively new; the endpoint shapes in
+  `apps/server/src/connectors/tidal.ts` and `auth/serviceConfig.ts` are
+  centralized in case they need adjustment against the live API.
+- If you connected Spotify or TIDAL **before** the Curator feature, reconnect
+  once (Disconnect, then Connect again) so the new library-modify / collection-
+  write scopes are granted — otherwise bulk unlike will fail for that service.
 
 Then in the **Recipe builder**, a tracks-mode recipe can be pushed straight to
 a new playlist on either connected service; unmatched and low-confidence
@@ -104,8 +115,8 @@ rediscovery) and tweak from there.
 ## Layout
 
 ```
-apps/server     Fastify API + sync/enrich jobs + recipe service (tsx, no build step)
-apps/web        React + Vite SPA (dashboard + recipe builder)
+apps/server     Fastify API + sync/enrich jobs + recipe/curate/unlike services (tsx, no build step)
+apps/web        React + Vite SPA (dashboard + recipe builder + curator)
 packages/core   domain types, name normalization, connector interfaces,
                 recipe AST, genre resolver, recipe→SQL compiler, deep links
 packages/db     SQLite schema, migrations, drizzle setup, custom SQL functions
@@ -120,6 +131,43 @@ a large library. Genre filtering understands a hierarchy — asking for `metal`
 also matches `progressive metal`, `djent`, etc. via the seeded (user-editable)
 `genre_rules` table plus a whole-word fallback. Results link straight out to
 Spotify/TIDAL search; Phase 4 upgrades those to exact track matches.
+
+## Curator
+
+The **Curator** tab bulk-organises loved/liked tracks (or albums) into
+playlists, and cleans up likes that were more of a "revisit later" bookmark
+than a true favourite.
+
+**Classify & push**: pick base criteria (loved source, play-count range,
+last/first-listen and peak-period ranges, tracks or albums) — this is a
+Recipe under the hood, run through the same compiler as the Recipe builder.
+Matches are grouped by broad genre **family** (asking for "metal" also
+catches progressive metal, djent, etc. via the same `genre_rules` hierarchy
+recipes use) or, in the finer mode, by each artist's single top genre tag.
+Tracks already in a playlist — either pushed by this app before, or found by
+**Sync playlists now** (a job that pulls your actual Spotify/TIDAL playlists
+and their tracks) — are excluded and reported as a count. Every criteria or
+grouping change re-previews live; ticking groups and tracks off before
+pushing *is* the refinement step, so there's no separate "refine" stage.
+Review the counts, tick which groups to keep, then push — one playlist per
+group, with the usual skip/replace/append handling for name clashes.
+
+**Cleanup (bulk unlike)**: filters loved/liked tracks by whether they're
+already in a playlist, play count, and how long since they were last played,
+then lets you bulk-unlike the ones that were just a "revisit later" tag
+rather than a real favourite. A per-track **shield** toggle protects a track
+from ever being bulk-unliked here, even if it's barely played — protection is
+enforced server-side regardless of what's selected. Unliking calls Spotify's
+`DELETE /me/tracks` and TIDAL's `DELETE /userCollectionTracks/.../items`
+directly; a **local only** option instead just stops treating the track as
+loved in this app's own filters, without touching the streaming service (so
+a Last.fm- or TIDAL-sourced love will resurface on the next sync unless also
+unloved there). **Last.fm unlikes aren't implemented**: Last.fm's public API
+is read-only for an app like this — writing (`track.unlove`) needs a second
+API secret, a bespoke signed-request scheme, and a whole separate browser-
+approval auth flow distinct from Spotify/TIDAL's OAuth. Last.fm-only loves
+are reported and skipped (or removed locally, if you opt in) rather than
+silently left half-handled.
 
 ## Voice / natural-language assistant
 

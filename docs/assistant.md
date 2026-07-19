@@ -105,3 +105,7 @@ Claude's mobile app requires *remote* custom connectors (streamable HTTP with
 auth), which this MCP server doesn't speak yet — that's a known follow-up. For
 phone/car/watch voice today, the OpenClaw + Telegram route above is the one
 that works end-to-end.
+
+Curator (bulk classify-into-playlists + bulk unlike, see the README) isn't
+exposed as MCP tools yet either — a natural follow-up alongside the mobile
+connector work above, e.g. *"organise my loved metal tracks into playlists"*.

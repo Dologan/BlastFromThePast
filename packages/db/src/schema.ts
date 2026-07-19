@@ -75,8 +75,10 @@ export const likedTracks = sqliteTable(
     trackId: integer('track_id')
       .notNull()
       .references(() => tracks.id),
-    source: text('source').notNull(),
+    source: text('source').notNull(), // 'lastfm' | 'spotify' | 'tidal'
     likedAt: integer('liked_at'),
+    /** Exempts this track from bulk "unlike" cleanup even if rarely played. */
+    protected: integer('protected').notNull().default(0),
   },
   (t) => [uniqueIndex('liked_tracks_track_source_unique').on(t.trackId, t.source)],
 );
@@ -255,4 +257,33 @@ export const playlistLogTracks = sqliteTable(
       .references(() => tracks.id),
   },
   (t) => [primaryKey({ columns: [t.playlistLogId, t.trackId] })],
+);
+
+/** A user's actual playlists on a streaming service, pulled by the playlist-inventory sync
+ * (distinct from playlist_log, which only tracks playlists this app itself pushed to). */
+export const servicePlaylists = sqliteTable(
+  'service_playlists',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    service: text('service').notNull(),
+    servicePlaylistId: text('service_playlist_id').notNull(),
+    name: text('name').notNull(),
+    isOwn: integer('is_own').notNull().default(1),
+    fetchedAt: integer('fetched_at').notNull(),
+  },
+  (t) => [uniqueIndex('service_playlists_service_id_unique').on(t.service, t.servicePlaylistId)],
+);
+
+export const servicePlaylistTracks = sqliteTable(
+  'service_playlist_tracks',
+  {
+    playlistId: integer('playlist_id')
+      .notNull()
+      .references(() => servicePlaylists.id),
+    serviceTrackId: text('service_track_id').notNull(),
+    trackId: integer('track_id').references(() => tracks.id),
+    rawName: text('raw_name'),
+    rawArtist: text('raw_artist'),
+  },
+  (t) => [primaryKey({ columns: [t.playlistId, t.serviceTrackId] })],
 );

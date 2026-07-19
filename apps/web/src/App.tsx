@@ -14,6 +14,7 @@ import {
   type TopArtistsRange,
 } from './api';
 import RecipeBuilder from './RecipeBuilder';
+import Curator from './Curator';
 import { countryName } from './countries';
 
 function formatDate(uts: number | null): string {
@@ -75,11 +76,20 @@ function progressText(status: SyncStatus): string | null {
     }
     return `Applying to library — ${p.processed} of ${p.total} artists`;
   }
-  if ('kind' in p && p.kind === 'spotify-liked') {
-    return `Importing Spotify liked — ${p.linked} matched of ${p.seen} seen`;
+  if ('kind' in p && p.kind === 'service-liked') {
+    return `Importing ${p.source} liked — ${p.linked} matched of ${p.seen} seen`;
   }
   if ('kind' in p && p.kind === 'push') {
     return `Building playlist — matched ${p.matched} of ${p.processed}/${p.total}`;
+  }
+  if ('kind' in p && p.kind === 'playlist-inventory') {
+    return `Syncing ${p.service} playlists — ${p.playlistsDone} of ${p.playlistsTotal}`;
+  }
+  if ('kind' in p && p.kind === 'curate') {
+    return `Pushing "${p.currentName}" — playlist ${p.playlistsDone + 1} of ${p.playlistsTotal}`;
+  }
+  if ('kind' in p && p.kind === 'unlike') {
+    return `Unliking — ${p.processed} of ${p.total}`;
   }
   if ('phase' in p) {
     if (p.phase === 'scrobbles' && p.totalPages)
@@ -203,18 +213,24 @@ function SyncPanel({
   onEnrich,
   onReprocess,
   onImportLiked,
+  onImportTidalLiked,
+  onSyncPlaylists,
   pendingEnrich,
   hasCache,
   spotifyConnected,
+  tidalConnected,
 }: {
   status: SyncStatus | null;
   onSync: () => void;
   onEnrich: () => void;
   onReprocess: () => void;
   onImportLiked: () => void;
+  onImportTidalLiked: () => void;
+  onSyncPlaylists: () => void;
   pendingEnrich: number;
   hasCache: boolean;
   spotifyConnected: boolean;
+  tidalConnected: boolean;
 }) {
   const running = status?.running ?? false;
   const text = status ? progressText(status) : null;
@@ -238,6 +254,20 @@ function SyncPanel({
         {spotifyConnected && (
           <button onClick={onImportLiked} disabled={running} title="Flag library tracks you've liked on Spotify">
             {running && status?.job === 'spotify-liked' ? 'Importing…' : 'Import Spotify liked'}
+          </button>
+        )}
+        {tidalConnected && (
+          <button onClick={onImportTidalLiked} disabled={running} title="Flag library tracks you've liked on TIDAL">
+            {running && status?.job === 'tidal-liked' ? 'Importing…' : 'Import TIDAL liked'}
+          </button>
+        )}
+        {(spotifyConnected || tidalConnected) && (
+          <button
+            onClick={onSyncPlaylists}
+            disabled={running}
+            title="Pull your actual playlists + tracks from connected services, so the Curator tab can see what's already playlisted"
+          >
+            {running && status?.job === 'playlist-inventory' ? 'Syncing playlists…' : 'Sync playlists'}
           </button>
         )}
       </div>
@@ -687,9 +717,12 @@ function Dashboard() {
           onEnrich={() => runJob(api.startEnrichment)}
           onReprocess={() => runJob(api.startReprocess)}
           onImportLiked={() => runJob(api.importSpotifyLiked)}
+          onImportTidalLiked={() => runJob(api.importTidalLiked)}
+          onSyncPlaylists={() => runJob(() => api.syncPlaylists())}
           pendingEnrich={summary?.enrichment.pending ?? 0}
           hasCache={(summary?.cache.mbArtists ?? 0) + (summary?.cache.mbSearches ?? 0) > 0}
           spotifyConnected={auth?.spotify.connected ?? false}
+          tidalConnected={auth?.tidal.connected ?? false}
         />
         {settings && (
           <ConnectionsPanel settings={settings} onSaved={() => api.getSettings().then(setSettings)} />
@@ -703,7 +736,7 @@ function Dashboard() {
   );
 }
 
-type Tab = 'dashboard' | 'builder';
+type Tab = 'dashboard' | 'builder' | 'curator';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('dashboard');
@@ -721,9 +754,12 @@ export default function App() {
           <button className={tab === 'builder' ? 'tab on' : 'tab'} onClick={() => setTab('builder')}>
             Recipe builder
           </button>
+          <button className={tab === 'curator' ? 'tab on' : 'tab'} onClick={() => setTab('curator')}>
+            Curator
+          </button>
         </nav>
       </header>
-      {tab === 'dashboard' ? <Dashboard /> : <RecipeBuilder />}
+      {tab === 'dashboard' ? <Dashboard /> : tab === 'builder' ? <RecipeBuilder /> : <Curator />}
     </main>
   );
 }

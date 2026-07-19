@@ -82,7 +82,7 @@ Filter clauses (all day counts: week=7, month=30, year=365):
 | `{"type":"notPlayedInDays","days":N}` | Not played for at least N days (the "forgotten" filter). |
 | `{"type":"playedInDays","days":N}` | Played within the last N days. |
 | `{"type":"playcount","min":N,"max":M}` | Total plays range (either bound optional). |
-| `{"type":"loved","source":"lastfm"\|"spotify"}` | Loved/liked only (omit source for either). |
+| `{"type":"loved","source":"lastfm"\|"spotify"\|"tidal"}` | Loved/liked only (omit source for any). |
 | `{"type":"firstListen","after":"YYYY-MM-DD","before":"YYYY-MM-DD"}` | Discovered in a date range ("music from my 2014 phase"). |
 | `{"type":"lastListen","after":...,"before":...}` | Last played in a date range. |
 | `{"type":"peakMonth","after":...,"before":...}` | Heaviest-listening month fell in the range. |

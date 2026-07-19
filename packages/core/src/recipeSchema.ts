@@ -83,8 +83,8 @@ export const RECIPE_JSON_SCHEMA = {
           },
           {
             type: 'object',
-            description: 'Only loved/liked items (Last.fm loved or Spotify liked; omit source for either).',
-            properties: { type: { const: 'loved' }, source: { enum: ['lastfm', 'spotify'] } },
+            description: 'Only loved/liked items (Last.fm loved, Spotify liked, or TIDAL liked; omit source for any).',
+            properties: { type: { const: 'loved' }, source: { enum: ['lastfm', 'spotify', 'tidal'] } },
             required: ['type'],
           },
           {

@@ -62,8 +62,16 @@ export interface ServiceConnector {
   /** Empties a playlist so it can be fully replaced via setPlaylistTracks. Optional;
    * connectors whose setPlaylistTracks already replaces outright (Spotify) don't need it. */
   clearPlaylist?(playlistId: string): Promise<void>;
-  /** Liked tracks, where the service exposes them (Spotify yes, TIDAL not yet). */
+  /** Liked tracks, where the service exposes them. */
   getLikedTracks?(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }>;
+  /** Removes tracks from the user's liked/favorite tracks, where the service supports it. */
+  removeLikedTracks?(serviceTrackIds: string[]): Promise<void>;
+  /** The user's own playlists (for playlist-inventory sync / exclusion). Optional. */
+  listPlaylists?(): Promise<{ serviceId: string; name: string; isOwn: boolean }[]>;
+  /** Track items of a playlist, with enough identity to match back to the library. Optional. */
+  getPlaylistItems?(
+    playlistId: string,
+  ): Promise<{ serviceTrackId: string; name?: string; artistName?: string; isrc?: string }[]>;
   deepLinkTrack(serviceId: string): string;
   deepLinkAlbum(serviceAlbumId: string): string;
   deepLinkArtist(serviceArtistId: string): string;

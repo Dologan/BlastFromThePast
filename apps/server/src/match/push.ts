@@ -45,6 +45,23 @@ export interface PushOptions {
 
 const LOW_CONFIDENCE = 0.6;
 
+export interface ExistingPlaylistLog {
+  playlistId: string;
+  createdAt: number;
+}
+
+/** Most recent push of `name` to `service` logged by this app, if any -- lets a
+ * caller ask "replace, append, or create new anyway?" instead of duplicating. */
+export function findExistingPlaylist(handle: DbHandle, service: ServiceName, name: string): ExistingPlaylistLog | null {
+  const row = handle.sqlite
+    .prepare(
+      `SELECT service_playlist_id AS playlistId, created_at AS createdAt FROM playlist_log
+       WHERE service = ? AND name = ? ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(service, name) as { playlistId: string; createdAt: number } | undefined;
+  return row ?? null;
+}
+
 /**
  * Matches a list of library tracks to a service, creates (or reuses) a
  * playlist, adds the matched tracks, and records the push in playlist_log

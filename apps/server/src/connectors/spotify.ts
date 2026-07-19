@@ -112,6 +112,54 @@ export class SpotifyConnector implements ServiceConnector {
     }
   }
 
+  /** Removes tracks from Liked Songs. Requires the `user-library-modify` scope. */
+  async removeLikedTracks(serviceTrackIds: string[]): Promise<void> {
+    for (const batch of chunk(serviceTrackIds, MAX_TRACKS_PER_REQUEST)) {
+      if (batch.length === 0) continue;
+      await authedJson(this.fetchImpl, this.getToken, 'DELETE', `${API}/me/tracks`, { ids: batch });
+    }
+  }
+
+  /** The user's own and followed playlists. */
+  async listPlaylists(): Promise<{ serviceId: string; name: string; isOwn: boolean }[]> {
+    const me = await authedJson(this.fetchImpl, this.getToken, 'GET', `${API}/me`);
+    const meId = me?.id;
+    const out: { serviceId: string; name: string; isOwn: boolean }[] = [];
+    let url: string | null = `${API}/me/playlists?limit=50`;
+    while (url) {
+      const data = await authedJson(this.fetchImpl, this.getToken, 'GET', url);
+      for (const item of data?.items ?? []) {
+        if (!item?.id) continue;
+        out.push({ serviceId: String(item.id), name: item.name ?? '', isOwn: item.owner?.id === meId });
+      }
+      url = data?.next ?? null;
+    }
+    return out;
+  }
+
+  async getPlaylistItems(
+    playlistId: string,
+  ): Promise<{ serviceTrackId: string; name?: string; artistName?: string; isrc?: string }[]> {
+    const out: { serviceTrackId: string; name?: string; artistName?: string; isrc?: string }[] = [];
+    let url: string | null =
+      `${API}/playlists/${playlistId}/tracks?fields=items(track(id,name,artists(name),external_ids(isrc))),next&limit=100`;
+    while (url) {
+      const data = await authedJson(this.fetchImpl, this.getToken, 'GET', url);
+      for (const item of data?.items ?? []) {
+        const track = item?.track;
+        if (!track?.id) continue;
+        out.push({
+          serviceTrackId: String(track.id),
+          name: track.name,
+          artistName: track.artists?.[0]?.name,
+          isrc: track.external_ids?.isrc,
+        });
+      }
+      url = data?.next ?? null;
+    }
+    return out;
+  }
+
   deepLinkTrack(serviceId: string): string {
     return `https://open.spotify.com/track/${serviceId}`;
   }

@@ -672,6 +672,134 @@ input[type='range'] {
   opacity: 0.55;
 }
 
+/* ---- Curator ---- */
+
+.curator {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.curator-criteria {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.curator-criteria label {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+  gap: 0.2rem;
+}
+
+.curator-criteria select,
+.curator-criteria input {
+  margin: 0;
+  width: auto;
+  min-width: 8rem;
+}
+
+.curator-exclude {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.75rem 0;
+}
+
+.curate-groups {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.6rem 0 1rem;
+}
+
+.curate-group {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 0.55rem 0.9rem;
+  background: light-dark(rgba(124, 92, 255, 0.03), rgba(124, 92, 255, 0.05));
+}
+
+.curate-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.curate-track-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.curate-track-list li {
+  padding: 0.15rem 0;
+  font-size: 0.92em;
+}
+
+.curate-results {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.curate-results li {
+  padding: 0.2rem 0;
+}
+
+.unlike-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.unlike-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.5rem 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.unlike-list li.deselected {
+  opacity: 0.45;
+}
+
+.unlike-list li.protected {
+  background: light-dark(rgba(179, 38, 30, 0.05), rgba(255, 138, 128, 0.08));
+}
+
+.unlike-list .result-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.shield {
+  background: none;
+  border: 1px solid var(--border-strong);
+  color: inherit;
+  border-radius: 999px;
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  font-size: 1em;
+  line-height: 1;
+  opacity: 0.5;
+}
+
+.shield.on {
+  opacity: 1;
+  border-color: var(--danger);
+  background: light-dark(rgba(179, 38, 30, 0.08), rgba(255, 138, 128, 0.12));
+}
+
 /* ---- Responsive: stack on narrow screens (phones) ---- */
 
 @media (max-width: 640px) {

@@ -23,7 +23,7 @@ export type Clause =
   | { type: 'notPlayedInDays'; days: number }
   | { type: 'playedInDays'; days: number }
   | { type: 'playcount'; min?: number; max?: number }
-  | { type: 'loved'; source?: 'lastfm' | 'spotify' }
+  | { type: 'loved'; source?: 'lastfm' | 'spotify' | 'tidal' }
   | { type: 'genre'; anyOf: string[]; mode?: 'canonical' | 'raw'; negate?: boolean }
   | { type: 'country'; anyOf: string[]; negate?: boolean }
   | { type: 'excludeRecentlyPlaylisted'; days: number }

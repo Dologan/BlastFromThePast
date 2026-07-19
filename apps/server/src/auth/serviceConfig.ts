@@ -20,14 +20,17 @@ export const SERVICE_CONFIG: Record<ServiceName, ServiceConfig> = {
     authorizeUrl: 'https://accounts.spotify.com/authorize',
     tokenUrl: 'https://accounts.spotify.com/api/token',
     apiBase: 'https://api.spotify.com/v1',
-    scopes: ['playlist-modify-private', 'playlist-modify-public', 'user-library-read'],
+    scopes: ['playlist-modify-private', 'playlist-modify-public', 'user-library-read', 'user-library-modify'],
     clientIdSetting: 'spotify.clientId',
   },
   tidal: {
     authorizeUrl: 'https://login.tidal.com/authorize',
     tokenUrl: 'https://auth.tidal.com/v1/oauth2/token',
     apiBase: 'https://openapi.tidal.com/v2',
-    scopes: ['playlists.write', 'playlists.read', 'collection.read'],
+    // 'collection.write' name is a best guess (TIDAL's docs didn't return the
+    // exact scope for DELETE /userCollectionTracks/.../items) -- confirm
+    // against a live developer-app consent screen and adjust if wrong.
+    scopes: ['playlists.write', 'playlists.read', 'collection.read', 'collection.write'],
     clientIdSetting: 'tidal.clientId',
   },
 };

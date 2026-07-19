@@ -105,8 +105,9 @@ export type EnrichProgress =
     }
   | { kind: 'enrich'; phase: 'derive'; processed: number; total: number };
 
-export interface SpotifyLikedProgress {
-  kind: 'spotify-liked';
+export interface ServiceLikedProgress {
+  kind: 'service-liked';
+  source: 'spotify' | 'tidal';
   seen: number;
   linked: number;
 }
@@ -118,7 +119,37 @@ export interface PushProgress {
   total: number;
 }
 
-export type JobProgress = SyncProgress | EnrichProgress | SpotifyLikedProgress | PushProgress;
+export interface PlaylistInventoryProgress {
+  kind: 'playlist-inventory';
+  service: ServiceName;
+  playlistsDone: number;
+  playlistsTotal: number;
+}
+
+export interface CuratePushProgress {
+  kind: 'curate';
+  playlistsDone: number;
+  playlistsTotal: number;
+  currentName: string;
+  matched: number;
+  processed: number;
+  total: number;
+}
+
+export interface UnlikeProgress {
+  kind: 'unlike';
+  processed: number;
+  total: number;
+}
+
+export type JobProgress =
+  | SyncProgress
+  | EnrichProgress
+  | ServiceLikedProgress
+  | PushProgress
+  | PlaylistInventoryProgress
+  | CuratePushProgress
+  | UnlikeProgress;
 
 export interface SyncStatus {
   running: boolean;
@@ -213,6 +244,76 @@ export interface LibrarySummary {
   topCountries: NamedWeight[];
 }
 
+export interface PlaylistInventoryEntry {
+  playlists: number;
+  tracks: number;
+  matchedTracks: number;
+  fetchedAt: number;
+}
+
+export type PlaylistInventory = Partial<Record<ServiceName, PlaylistInventoryEntry>>;
+
+export type GroupBy = 'genreFamily' | 'canonicalGenre';
+
+export interface CurateGroup {
+  key: string;
+  name: string;
+  count: number;
+  entityIds: number[];
+  sample: string[];
+}
+
+export interface CuratePreviewResult {
+  totalMatched: number;
+  excluded: number;
+  groups: CurateGroup[];
+}
+
+export interface CuratePreviewRequest {
+  base: Recipe;
+  groupBy: GroupBy;
+  excludePlaylistedOn?: ServiceName[];
+  minGroupSize?: number;
+  namePrefix?: string;
+}
+
+export interface CuratePushPlaylistRequest {
+  name: string;
+  trackIds: number[];
+}
+
+export type OnExisting = 'skip' | 'replace' | 'append';
+
+export type CuratePushOutcome = (PushResult & { skipped?: undefined }) | { skipped: true; name: string };
+
+export type LikedSource = 'lastfm' | 'spotify' | 'tidal';
+
+export interface UnlikePreviewRow {
+  trackId: number;
+  name: string;
+  artistName: string;
+  sources: LikedSource[];
+  playcount: number;
+  lastListen: number;
+  protected: boolean;
+  playlistNames: string[];
+}
+
+export interface UnlikePreviewOptions {
+  inPlaylistOn?: ServiceName[] | 'any';
+  maxPlaycount?: number;
+  notPlayedInDays?: number;
+  source?: LikedSource;
+}
+
+export interface UnlikeExecuteResult {
+  unliked: number;
+  spotifyRemoved: number;
+  tidalRemoved: number;
+  localOnlyRemoved: number;
+  skipped: { trackId: number; reason: string }[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {
@@ -280,6 +381,7 @@ export const api = {
   disconnect: (service: ServiceName) =>
     request<void>(`/api/auth/${service}/disconnect`, { method: 'POST' }),
   importSpotifyLiked: () => request<{ started: boolean }>('/api/sync/spotify-liked', { method: 'POST' }),
+  importTidalLiked: () => request<{ started: boolean }>('/api/sync/tidal-liked', { method: 'POST' }),
 
   push: (
     recipe: Recipe,
@@ -316,4 +418,49 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ service, items }),
     }),
+
+  // ---- Curator: playlist inventory ----
+  syncPlaylists: (service?: ServiceName) =>
+    request<{ started: boolean; services: ServiceName[] }>('/api/sync/playlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(service ? { service } : {}),
+    }),
+  getPlaylistInventory: () => request<PlaylistInventory>('/api/playlists/inventory'),
+
+  // ---- Curator: classify & push ----
+  curatePreview: (body: CuratePreviewRequest) =>
+    request<CuratePreviewResult>('/api/curate/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  curatePush: (service: ServiceName, onExisting: OnExisting, playlists: CuratePushPlaylistRequest[]) =>
+    request<{ started: boolean; playlistCount: number }>('/api/curate/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service, onExisting, playlists }),
+    }),
+  getCurateResult: () => request<{ results: CuratePushOutcome[] | null }>('/api/curate/result'),
+
+  // ---- Curator: cleanup (bulk unlike) ----
+  unlikePreview: (opts: UnlikePreviewOptions) =>
+    request<{ rows: UnlikePreviewRow[] }>('/api/unlike/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    }),
+  protectTrack: (trackId: number, isProtected: boolean) =>
+    request<void>('/api/tracks/protect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackId, protected: isProtected }),
+    }),
+  unlikeExecute: (trackIds: number[], localOnly: boolean) =>
+    request<{ started: boolean; trackCount: number }>('/api/unlike/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackIds, localOnly }),
+    }),
+  getUnlikeResult: () => request<{ result: UnlikeExecuteResult | null }>('/api/unlike/result'),
 };

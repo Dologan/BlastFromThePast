@@ -13,10 +13,16 @@ import { TokenStore } from './auth/tokenStore.js';
 import { AuthManager, AuthError } from './auth/authManager.js';
 import { SpotifyConnector } from './connectors/spotify.js';
 import { TidalConnector } from './connectors/tidal.js';
-import { pushPlaylist, type PushResult } from './match/push.js';
+import { pushPlaylist, findExistingPlaylist, type PushResult } from './match/push.js';
+import { expandAlbumTracks } from './match/albumTracks.js';
 import { ServiceMatcher } from './match/matcher.js';
+import { CurateService } from './curate/curateService.js';
+import type { CuratePreviewOptions, CuratePushOutcome } from './curate/curateService.js';
+import { UnlikeService } from './unlike/unlikeService.js';
+import type { UnlikeExecuteResult, UnlikePreviewOptions } from './unlike/unlikeService.js';
 import { resolveDeepLink, type LinkEntityKind } from './match/entityLinks.js';
-import { importSpotifyLiked } from './sync/spotifyLiked.js';
+import { importServiceLiked } from './sync/spotifyLiked.js';
+import { syncPlaylistInventory } from './sync/playlistInventory.js';
 import { getSetting, getStoredSetting, setSetting, SETTING_KEYS } from './settings.js';
 import { computeGaps, computeNeglectedGems, computeOnThisDay, type InsightKind } from './stats/insights.js';
 import {
@@ -59,6 +65,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   const createMb =
     opts.createMusicBrainzClient ?? (() => new MusicBrainzClient(MB_USER_AGENT));
   const recipes = new RecipeService(handle);
+  const curate = new CurateService(handle);
+  const unlike = new UnlikeService(handle);
 
   const publicUrl = opts.publicUrl ?? process.env.BFTP_PUBLIC_URL ?? 'http://127.0.0.1:8765';
   const crypto = opts.dataDir
@@ -346,27 +354,62 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (!auth.isAuthorized('spotify')) return reply.code(400).send({ error: 'Connect Spotify first.' });
     const connector = makeConnector('spotify');
     const started = jobs.start('spotify-liked', async () => {
-      await importSpotifyLiked(handle, connector, jobs.reportProgress);
+      await importServiceLiked(handle, connector, 'spotify', jobs.reportProgress);
     });
     if (!started) return reply.code(409).send({ error: 'A job is already running.' });
     return reply.code(202).send({ started: true });
   });
 
-  // ---- Playlist push ----
+  app.post('/api/sync/tidal-liked', async (req, reply) => {
+    if (!auth.isAuthorized('tidal')) return reply.code(400).send({ error: 'Connect TIDAL first.' });
+    const connector = makeConnector('tidal');
+    const started = jobs.start('tidal-liked', async () => {
+      await importServiceLiked(handle, connector, 'tidal', jobs.reportProgress);
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true });
+  });
 
-  /** All library tracks of an album (via its scrobbles), oldest-first-heard. */
-  const expandAlbumTracks = (albumId: number) =>
-    handle.sqlite
+  // ---- Playlist inventory sync (Curator: "which loved tracks already exist in a playlist") ----
+
+  app.post('/api/sync/playlists', async (req, reply) => {
+    const body = (req.body as { service?: string } | undefined) ?? {};
+    const requested = body.service ? parseService(body.service) : null;
+    if (body.service && !requested) return reply.code(400).send({ error: 'Unknown service.' });
+    const services = requested ? [requested] : SERVICES.filter((s) => auth.isAuthorized(s));
+    if (services.length === 0) return reply.code(400).send({ error: 'Connect a service first.' });
+
+    const started = jobs.start('playlist-inventory', async () => {
+      for (const service of services) {
+        const connector = makeConnector(service);
+        await syncPlaylistInventory(handle, connector, service, jobs.reportProgress);
+      }
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true, services });
+  });
+
+  app.get('/api/playlists/inventory', async () => {
+    const rows = handle.sqlite
       .prepare(
-        `SELECT t.id AS trackId, t.name AS name, a.name AS artistName
-         FROM scrobbles s
-         JOIN tracks t ON t.id = s.track_id
-         JOIN artists a ON a.id = t.artist_id
-         WHERE s.album_id = ?
-         GROUP BY t.id
-         ORDER BY MIN(s.uts)`,
+        `SELECT sp.service AS service,
+                COUNT(DISTINCT sp.id) AS playlists,
+                COUNT(spt.service_track_id) AS tracks,
+                SUM(CASE WHEN spt.track_id IS NOT NULL THEN 1 ELSE 0 END) AS matchedTracks,
+                MAX(sp.fetched_at) AS fetchedAt
+         FROM service_playlists sp
+         LEFT JOIN service_playlist_tracks spt ON spt.playlist_id = sp.id
+         GROUP BY sp.service`,
       )
-      .all(albumId) as { trackId: number; name: string; artistName: string }[];
+      .all() as { service: ServiceName; playlists: number; tracks: number; matchedTracks: number; fetchedAt: number }[];
+    const bySer: Record<string, { playlists: number; tracks: number; matchedTracks: number; fetchedAt: number }> = {};
+    for (const r of rows) {
+      bySer[r.service] = { playlists: r.playlists, tracks: r.tracks, matchedTracks: r.matchedTracks ?? 0, fetchedAt: r.fetchedAt };
+    }
+    return bySer;
+  });
+
+  // ---- Playlist push ----
 
   /** Most recent push of this name to this service, if any -- lets the UI ask
    * "replace or add to it?" instead of silently duplicating a playlist. */
@@ -374,12 +417,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const q = req.query as { service?: string; name?: string };
     const service = q.service ? parseService(q.service) : null;
     if (!service || !q.name?.trim()) return reply.code(400).send({ error: 'service and name are required.' });
-    const row = handle.sqlite
-      .prepare(
-        `SELECT service_playlist_id AS playlistId, created_at AS createdAt FROM playlist_log
-         WHERE service = ? AND name = ? ORDER BY created_at DESC LIMIT 1`,
-      )
-      .get(service, q.name.trim()) as { playlistId: string; createdAt: number } | undefined;
+    const row = findExistingPlaylist(handle, service, q.name.trim());
     if (!row) return { existing: null };
     const connector = makeConnector(service);
     return {
@@ -418,7 +456,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const tracks =
       body.recipe.output.mode === 'tracks'
         ? rows.map((r) => ({ trackId: r.entityId, name: r.name, artistName: r.artistName }))
-        : rows.flatMap((r) => expandAlbumTracks(r.entityId));
+        : rows.flatMap((r) => expandAlbumTracks(handle, r.entityId));
     if (tracks.length === 0) return { error: 'Nothing selected to push.' };
 
     return {
@@ -474,6 +512,132 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   app.get('/api/push/result', async () => ({ result: lastPush }));
+
+  // ---- Curator: bulk classify loved tracks/albums into playlists ----
+
+  app.post('/api/curate/preview', async (req, reply) => {
+    const body = req.body as
+      | {
+          base?: Recipe;
+          groupBy?: string;
+          excludePlaylistedOn?: string[];
+          minGroupSize?: number;
+          namePrefix?: string;
+        }
+      | undefined;
+    if (!body?.base || !Array.isArray(body.base.filters) || !body.base.output) {
+      return reply.code(400).send({ error: 'A valid base recipe is required.' });
+    }
+    const groupBy = body.groupBy === 'canonicalGenre' ? 'canonicalGenre' : 'genreFamily';
+    const excludePlaylistedOn = (body.excludePlaylistedOn ?? []).filter((s): s is ServiceName => Boolean(parseService(s)));
+    const opts: CuratePreviewOptions = {
+      base: body.base,
+      groupBy,
+      excludePlaylistedOn,
+      minGroupSize: body.minGroupSize,
+      namePrefix: body.namePrefix,
+    };
+    try {
+      return curate.preview(recipes, opts);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  let lastCurate: CuratePushOutcome[] | null = null;
+
+  interface CuratePushRequestBody {
+    service?: string;
+    onExisting?: 'skip' | 'replace' | 'append';
+    playlists?: { name: string; trackIds: number[] }[];
+  }
+
+  app.post('/api/curate/push', async (req, reply) => {
+    const body = req.body as CuratePushRequestBody | undefined;
+    const service = body?.service ? parseService(body.service) : null;
+    if (!service) return reply.code(400).send({ error: 'A valid service is required.' });
+    if (!auth.isAuthorized(service)) return reply.code(400).send({ error: `Connect ${service} first.` });
+    const playlists = (body?.playlists ?? []).filter((p) => p?.name?.trim() && p.trackIds?.length > 0);
+    if (playlists.length === 0) return reply.code(400).send({ error: 'At least one non-empty playlist is required.' });
+    const onExisting = body?.onExisting ?? 'skip';
+
+    const connector = makeConnector(service);
+    lastCurate = null;
+    const started = jobs.start('curate-push', async () => {
+      lastCurate = await curate.push(connector, service, onExisting, playlists, jobs.reportProgress);
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true, playlistCount: playlists.length });
+  });
+
+  app.get('/api/curate/result', async () => ({ results: lastCurate }));
+
+  // ---- Unlike (bulk "unliking" of loved tracks already safely in a playlist) ----
+
+  app.post('/api/unlike/preview', async (req, reply) => {
+    const body = req.body as
+      | {
+          inPlaylistOn?: string[] | 'any';
+          maxPlaycount?: number;
+          notPlayedInDays?: number;
+          source?: string;
+        }
+      | undefined;
+    let inPlaylistOn: UnlikePreviewOptions['inPlaylistOn'];
+    if (body?.inPlaylistOn === 'any') {
+      inPlaylistOn = 'any';
+    } else if (Array.isArray(body?.inPlaylistOn)) {
+      const parsed = body.inPlaylistOn.map(parseService).filter((s): s is ServiceName => Boolean(s));
+      if (parsed.length !== body.inPlaylistOn.length) {
+        return reply.code(400).send({ error: 'inPlaylistOn must contain only spotify/tidal.' });
+      }
+      inPlaylistOn = parsed;
+    }
+    const rawSource = body?.source;
+    if (rawSource && rawSource !== 'lastfm' && rawSource !== 'spotify' && rawSource !== 'tidal') {
+      return reply.code(400).send({ error: 'source must be lastfm, spotify or tidal.' });
+    }
+    const source = rawSource as 'lastfm' | 'spotify' | 'tidal' | undefined;
+    return {
+      rows: unlike.preview({
+        inPlaylistOn,
+        maxPlaycount: body?.maxPlaycount,
+        notPlayedInDays: body?.notPlayedInDays,
+        source,
+      }),
+    };
+  });
+
+  app.post('/api/tracks/protect', async (req, reply) => {
+    const body = req.body as { trackId?: number; protected?: boolean } | undefined;
+    if (!body?.trackId) return reply.code(400).send({ error: 'trackId is required.' });
+    unlike.protectTrack(body.trackId, Boolean(body.protected));
+    reply.code(204);
+  });
+
+  let lastUnlike: UnlikeExecuteResult | null = null;
+
+  app.post('/api/unlike/execute', async (req, reply) => {
+    const body = req.body as { trackIds?: number[]; localOnly?: boolean } | undefined;
+    const trackIds = body?.trackIds ?? [];
+    if (trackIds.length === 0) return reply.code(400).send({ error: 'trackIds is required.' });
+    const localOnly = Boolean(body?.localOnly);
+
+    const connectors: Partial<Record<'spotify' | 'tidal', ServiceConnector>> = {};
+    if (!localOnly) {
+      if (auth.isAuthorized('spotify')) connectors.spotify = makeConnector('spotify');
+      if (auth.isAuthorized('tidal')) connectors.tidal = makeConnector('tidal');
+    }
+
+    lastUnlike = null;
+    const started = jobs.start('unlike', async () => {
+      lastUnlike = await unlike.execute(trackIds, localOnly, connectors, jobs.reportProgress);
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true, trackCount: trackIds.length });
+  });
+
+  app.get('/api/unlike/result', async () => ({ result: lastUnlike }));
 
   // ---- Match fix-up ----
 
