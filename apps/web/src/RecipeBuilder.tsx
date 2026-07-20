@@ -10,6 +10,7 @@ import {
   type PushResult,
   type SavedRecipe,
   type ServiceName,
+  type SyncStatus,
 } from './api';
 import {
   SORT_LABELS,
@@ -22,6 +23,7 @@ import {
 import { countryName } from './countries';
 import { ChipInput, DateRangeInput, DaysInput, SliderField } from './components/clauseEditors';
 import { MatchFixup } from './components/matchFixup';
+import { ProgressBar } from './components/progress';
 
 const CLAUSE_LABELS: Record<ClauseType, string> = {
   genre: 'Genre',
@@ -288,7 +290,7 @@ export default function RecipeBuilder() {
     genre: defaultClause('genre'),
     notPlayedInDays: defaultClause('notPlayedInDays'),
   });
-  const [output, setOutput] = useState<RecipeOutput>({ mode: 'albums', sort: 'neglect', limit: 50 });
+  const [output, setOutput] = useState<RecipeOutput>({ mode: 'tracks', sort: 'neglect', limit: 50 });
   const [result, setResult] = useState<PreviewResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedRecipe[]>([]);
@@ -299,6 +301,7 @@ export default function RecipeBuilder() {
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [pushing, setPushing] = useState<ServiceName | null>(null);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const [pushStatus, setPushStatus] = useState<SyncStatus | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [conflict, setConflict] = useState<{ service: ServiceName; existing: ExistingPlaylist } | null>(null);
 
@@ -333,6 +336,7 @@ export default function RecipeBuilder() {
     const playlistName = name.trim() || 'Blast From The Past';
     setPushing(service);
     setPushResult(null);
+    setPushStatus(null);
     setPushMsg(
       mode === 'replace'
         ? `Replacing "${playlistName}" on ${service}…`
@@ -342,11 +346,13 @@ export default function RecipeBuilder() {
     );
     try {
       await api.push(recipe, service, playlistName, [...selected], mode, existingPlaylistId);
-      // Poll until the background push job finishes, then read its result.
+      // Poll until the background push job finishes, updating the progress bar as we go.
       let lastStatus = await api.getSyncStatus();
+      setPushStatus(lastStatus);
       for (let i = 0; i < 200 && lastStatus.running; i++) {
         await new Promise((r) => setTimeout(r, 750));
         lastStatus = await api.getSyncStatus();
+        setPushStatus(lastStatus);
       }
       const { result } = await api.getPushResult();
       setPushResult(result);
@@ -365,6 +371,7 @@ export default function RecipeBuilder() {
       setPushMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setPushing(null);
+      setPushStatus(null);
     }
   };
 
@@ -454,7 +461,7 @@ export default function RecipeBuilder() {
 
   const newRecipe = () => {
     setEnabled({ genre: defaultClause('genre'), notPlayedInDays: defaultClause('notPlayedInDays') });
-    setOutput({ mode: 'albums', sort: 'neglect', limit: 50 });
+    setOutput({ mode: 'tracks', sort: 'neglect', limit: 50 });
     setName('');
     setCurrentId(null);
   };
@@ -667,7 +674,8 @@ export default function RecipeBuilder() {
             </div>
           </div>
         )}
-        {pushMsg && <p className="hint">{pushMsg}</p>}
+        {pushing && <ProgressBar status={pushStatus} fallbackText={pushMsg ?? undefined} />}
+        {!pushing && pushMsg && <p className="hint">{pushMsg}</p>}
         {pushResult && (
           <p className="hint">
             Playlist now has {pushResult.matchedCount} track{pushResult.matchedCount === 1 ? '' : 's'} from this push —{' '}

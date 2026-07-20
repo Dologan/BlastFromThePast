@@ -13,21 +13,25 @@ import {
   type PlaylistInventory,
   type ServiceName,
   type Settings,
+  type SyncStatus,
   type UnlikeExecuteResult,
   type UnlikePreviewRow,
 } from './api';
 import type { Clause, Recipe } from './recipeTypes';
 import { DateRangeInput, DaysInput, SliderField } from './components/clauseEditors';
 import { MatchFixup } from './components/matchFixup';
+import { ProgressBar } from './components/progress';
 
 const SERVICE_LABEL: Record<ServiceName, string> = { spotify: 'Spotify', tidal: 'TIDAL' };
 
 /** Waits for the current background job to finish, polling like RecipeBuilder's push flow. */
-async function waitForJob(maxAttempts = 400): Promise<{ error: string | null }> {
+async function waitForJob(onProgress?: (status: SyncStatus) => void, maxAttempts = 400): Promise<{ error: string | null }> {
   let status = await api.getSyncStatus();
+  onProgress?.(status);
   for (let i = 0; i < maxAttempts && status.running; i++) {
     await new Promise((r) => setTimeout(r, 750));
     status = await api.getSyncStatus();
+    onProgress?.(status);
   }
   return { error: status.error };
 }
@@ -142,6 +146,7 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
   const [pushResults, setPushResults] = useState<{ name: string; outcome: CuratePushOutcome }[] | null>(null);
   const [inventory, setInventory] = useState<PlaylistInventory | null>(null);
   const [syncingPlaylists, setSyncingPlaylists] = useState(false);
+  const [jobStatus, setJobStatus] = useState<SyncStatus | null>(null);
 
   const base = useMemo(() => buildBaseRecipe(criteria), [criteria]);
   const connected: ServiceName[] = [
@@ -218,15 +223,17 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
   const syncPlaylistsNow = async () => {
     setSyncingPlaylists(true);
     setError(null);
+    setJobStatus(null);
     try {
       await api.syncPlaylists();
-      const { error: jobError } = await waitForJob();
+      const { error: jobError } = await waitForJob(setJobStatus);
       if (jobError) setError(`Playlist sync failed: ${jobError}`);
       await refreshInventory();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSyncingPlaylists(false);
+      setJobStatus(null);
     }
   };
 
@@ -248,9 +255,10 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
     setPushing(true);
     setPushMsg(null);
     setPushResults(null);
+    setJobStatus(null);
     try {
       await api.curatePush(service, onExisting, playlists);
-      const { error: jobError } = await waitForJob();
+      const { error: jobError } = await waitForJob(setJobStatus);
       const { results } = await api.getCurateResult();
       if (results) {
         setPushResults(results.map((outcome, i) => ({ name: playlists[i]?.name ?? '', outcome })));
@@ -262,6 +270,7 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
       setPushMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setPushing(false);
+      setJobStatus(null);
     }
   };
 
@@ -391,6 +400,7 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
           {syncingPlaylists ? 'Syncing…' : 'Sync playlists now'}
         </button>
       </div>
+      {syncingPlaylists && <ProgressBar status={jobStatus} fallbackText="Syncing playlists…" />}
 
       {error && <p className="error">{error}</p>}
       {preview && (
@@ -466,7 +476,8 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
           </div>
         </div>
       )}
-      {pushMsg && <p className="hint">{pushMsg}</p>}
+      {pushing && <ProgressBar status={jobStatus} fallbackText="Pushing…" />}
+      {!pushing && pushMsg && <p className="hint">{pushMsg}</p>}
       {pushResults && (
         <ul className="curate-results">
           {pushResults.map(({ name, outcome }, i) =>
@@ -515,6 +526,7 @@ function Cleanup() {
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<UnlikeExecuteResult | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<SyncStatus | null>(null);
 
   const refresh = () => {
     api
@@ -564,9 +576,10 @@ function Cleanup() {
     setExecuting(true);
     setMsg(null);
     setResult(null);
+    setJobStatus(null);
     try {
       await api.unlikeExecute([...selected], localOnly);
-      const { error: jobError } = await waitForJob();
+      const { error: jobError } = await waitForJob(setJobStatus);
       const { result: outcome } = await api.getUnlikeResult();
       setResult(outcome);
       if (!outcome) setMsg(jobError ? `Failed: ${jobError}` : 'Finished but returned no result.');
@@ -576,6 +589,7 @@ function Cleanup() {
     } finally {
       setExecuting(false);
       setConfirming(false);
+      setJobStatus(null);
     }
   };
 
@@ -692,7 +706,8 @@ function Cleanup() {
           </div>
         </div>
       )}
-      {msg && <p className="hint">{msg}</p>}
+      {executing && <ProgressBar status={jobStatus} fallbackText="Working…" />}
+      {!executing && msg && <p className="hint">{msg}</p>}
       {result && (
         <p className="hint">
           Unliked {result.unliked}. Spotify removed: {result.spotifyRemoved}. TIDAL removed: {result.tidalRemoved}.

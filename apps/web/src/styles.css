@@ -238,6 +238,52 @@ details.advanced[open] summary {
   font-size: 0.9em;
 }
 
+.progress {
+  margin: 0.5rem 0;
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), light-dark(#b04cd9, #d17bf0));
+  transition: width 0.3s ease;
+}
+
+.progress-track.indeterminate {
+  position: relative;
+}
+
+.progress-track.indeterminate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), light-dark(#b04cd9, #d17bf0));
+  animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+.progress-label {
+  margin: 0.3rem 0 0;
+}
+
 .error {
   color: var(--danger);
 }

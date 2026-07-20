@@ -16,6 +16,7 @@ import {
 import RecipeBuilder from './RecipeBuilder';
 import Curator from './Curator';
 import { countryName } from './countries';
+import { ProgressBar } from './components/progress';
 
 function formatDate(uts: number | null): string {
   if (!uts) return '—';
@@ -67,38 +68,6 @@ function SettingsPanel({ settings, onSaved }: { settings: Settings; onSaved: () 
   );
 }
 
-function progressText(status: SyncStatus): string | null {
-  const p = status.progress;
-  if (!status.running || !p) return null;
-  if ('kind' in p && p.kind === 'enrich') {
-    if (p.phase === 'fetch') {
-      return `Fetching metadata — MusicBrainz ${p.mbProcessed}/${p.mbTotal}, Last.fm ${p.lastfmProcessed}/${p.lastfmTotal}`;
-    }
-    return `Applying to library — ${p.processed} of ${p.total} artists`;
-  }
-  if ('kind' in p && p.kind === 'service-liked') {
-    return `Importing ${p.source} liked — ${p.linked} matched of ${p.seen} seen`;
-  }
-  if ('kind' in p && p.kind === 'push') {
-    return `Building playlist — matched ${p.matched} of ${p.processed}/${p.total}`;
-  }
-  if ('kind' in p && p.kind === 'playlist-inventory') {
-    return `Syncing ${p.service} playlists — ${p.playlistsDone} of ${p.playlistsTotal}`;
-  }
-  if ('kind' in p && p.kind === 'curate') {
-    return `Pushing "${p.currentName}" — playlist ${p.playlistsDone + 1} of ${p.playlistsTotal}`;
-  }
-  if ('kind' in p && p.kind === 'unlike') {
-    return `Unliking — ${p.processed} of ${p.total}`;
-  }
-  if ('phase' in p) {
-    if (p.phase === 'scrobbles' && p.totalPages)
-      return `Scrobbles: page ${p.page} of ${p.totalPages} — ${p.inserted} new`;
-    if (p.phase === 'loved') return `Loved tracks: page ${p.page ?? 1}`;
-    return 'Rebuilding stats…';
-  }
-  return null;
-}
 
 function ConnectionsPanel({
   settings,
@@ -233,7 +202,6 @@ function SyncPanel({
   tidalConnected: boolean;
 }) {
   const running = status?.running ?? false;
-  const text = status ? progressText(status) : null;
   return (
     <section className="panel">
       <h2>Sync</h2>
@@ -271,7 +239,7 @@ function SyncPanel({
           </button>
         )}
       </div>
-      {text && <p>{text}</p>}
+      <ProgressBar status={status} />
       {status?.error && <p className="error">Last job failed: {status.error}</p>}
       <ul className="sources">
         {status?.sources.map((s) => (
