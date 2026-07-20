@@ -179,44 +179,69 @@ export class TidalConnector implements ServiceConnector {
     await this.setPlaylistTracks(playlistId, serviceTrackIds);
   }
 
-  /** Removes specific tracks from a playlist (unlike clearPlaylist, which empties it entirely). */
-  async removePlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
-    // De-duplicate: TIDAL's relationship-delete schema rejects a repeated
-    // {type,id} pair in the same request body (observed: "data/N/meta must
-    // not be null" on the second occurrence) rather than treating it as a
-    // no-op, so a track listed twice must only be sent once.
-    const ids = [...new Set(serviceTrackIds)];
-    for (const batch of chunk(ids, PLAYLIST_ITEMS_BATCH_SIZE)) {
-      if (batch.length === 0) continue;
-      await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
-        data: batch.map((id) => ({ type: 'tracks', id })),
-      });
-    }
-  }
-
-  /** Track ids currently in the playlist, for append-mode de-duplication. */
-  async getPlaylistTrackIds(playlistId: string): Promise<string[]> {
-    const ids: string[] = [];
+  /**
+   * Track ids currently in the playlist, each paired with its playlist-item id
+   * (`meta.itemId` on the relationship resource) -- distinct from the track id,
+   * and needed to identify a specific occurrence when the same track appears
+   * in the playlist more than once.
+   */
+  private async getPlaylistItemRefs(playlistId: string): Promise<{ id: string; itemId: string }[]> {
+    const refs: { id: string; itemId: string }[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 50; page++) {
       const path = `/playlists/${playlistId}/relationships/items${cursor ? `?page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
       const data = await this.request('GET', path);
       for (const item of data?.data ?? []) {
-        if (item?.id) ids.push(String(item.id));
+        if (item?.id && item?.meta?.itemId) refs.push({ id: String(item.id), itemId: String(item.meta.itemId) });
       }
       const next = data?.links?.meta?.nextCursor;
       if (!next) break;
       cursor = next;
     }
-    return ids;
+    return refs;
+  }
+
+  /** Issues the batched DELETEs for a set of playlist-item refs. TIDAL's
+   * relationship-delete schema requires a `meta.itemId` per entry (rejecting
+   * one without it as "meta must not be null") so it can tell apart repeated
+   * occurrences of the same track -- a plain de-duplicated {type,id} list
+   * isn't sufficient and can't remove a legitimately-repeated track. */
+  private async deleteItemRefs(playlistId: string, refs: { id: string; itemId: string }[]): Promise<void> {
+    for (const batch of chunk(refs, PLAYLIST_ITEMS_BATCH_SIZE)) {
+      if (batch.length === 0) continue;
+      await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
+        data: batch.map((r) => ({ type: 'tracks', id: r.id, meta: { itemId: r.itemId } })),
+      });
+    }
+  }
+
+  /** Removes specific tracks from a playlist (unlike clearPlaylist, which empties it entirely). */
+  async removePlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
+    if (serviceTrackIds.length === 0) return;
+    const wanted = new Set(serviceTrackIds);
+    const refs = (await this.getPlaylistItemRefs(playlistId)).filter((r) => wanted.has(r.id));
+    await this.deleteItemRefs(playlistId, refs);
+  }
+
+  /** Track ids currently in the playlist, for append-mode de-duplication. */
+  async getPlaylistTrackIds(playlistId: string): Promise<string[]> {
+    return (await this.getPlaylistItemRefs(playlistId)).map((r) => r.id);
   }
 
   /** Empties a playlist -- TIDAL's item-add endpoint only appends, so a "replace"
-   * push needs this before setPlaylistTracks. */
+   * push needs this before setPlaylistTracks. Prefer `deletePlaylist` +
+   * `createPlaylist` for a full-contents replace: it sidesteps this endpoint
+   * entirely. This remains for callers (or connectors) that need to actually
+   * empty a specific existing playlist in place rather than replace it. */
   async clearPlaylist(playlistId: string): Promise<void> {
-    const ids = await this.getPlaylistTrackIds(playlistId);
-    if (ids.length === 0) return;
-    await this.removePlaylistTracks(playlistId, ids);
+    const refs = await this.getPlaylistItemRefs(playlistId);
+    await this.deleteItemRefs(playlistId, refs);
+  }
+
+  /** Deletes a playlist outright. Used by 'replace' pushes as delete + recreate,
+   * rather than clearing and repopulating an existing playlist in place. */
+  async deletePlaylist(playlistId: string): Promise<void> {
+    await this.request('DELETE', `/playlists/${playlistId}`);
   }
 
   /** Paginated liked tracks via the `userCollectionTracks` resource. */

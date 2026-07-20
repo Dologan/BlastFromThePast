@@ -217,9 +217,9 @@ describe('TidalConnector', () => {
 
   it('getPlaylistTrackIds paginates via page[cursor]', async () => {
     const { fetchImpl } = recorder((url) => {
-      if (url.includes('page[cursor]=CURSOR1')) return { data: [{ id: 't3', type: 'tracks' }] };
+      if (url.includes('page[cursor]=CURSOR1')) return { data: [{ id: 't3', type: 'tracks', meta: { itemId: 'i3' } }] };
       return {
-        data: [{ id: 't1', type: 'tracks' }, { id: 't2', type: 'tracks' }],
+        data: [{ id: 't1', type: 'tracks', meta: { itemId: 'i1' } }, { id: 't2', type: 'tracks', meta: { itemId: 'i2' } }],
         links: { meta: { nextCursor: 'CURSOR1' } },
       };
     });
@@ -227,17 +227,17 @@ describe('TidalConnector', () => {
     expect(await c.getPlaylistTrackIds('tpl1')).toEqual(['t1', 't2', 't3']);
   });
 
-  it('clearPlaylist fetches existing items then DELETEs them', async () => {
+  it('clearPlaylist fetches existing items then DELETEs them with each item\'s meta.itemId', async () => {
     const { fetchImpl, calls } = recorder((_url, method) => {
       if (method === 'DELETE') return undefined; // 204
-      return { data: [{ id: 't1', type: 'tracks' }, { id: 't2', type: 'tracks' }] };
+      return { data: [{ id: 't1', type: 'tracks', meta: { itemId: 'i1' } }, { id: 't2', type: 'tracks', meta: { itemId: 'i2' } }] };
     });
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
     await c.clearPlaylist('tpl1');
     const del = calls.find((c) => c.method === 'DELETE')!;
     expect(JSON.parse(del.body!).data).toEqual([
-      { type: 'tracks', id: 't1' },
-      { type: 'tracks', id: 't2' },
+      { type: 'tracks', id: 't1', meta: { itemId: 'i1' } },
+      { type: 'tracks', id: 't2', meta: { itemId: 'i2' } },
     ]);
   });
 
@@ -246,6 +246,16 @@ describe('TidalConnector', () => {
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
     await c.clearPlaylist('tpl1');
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('deletePlaylist issues a bare DELETE against the playlist resource', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.deletePlaylist!('tpl1');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('DELETE');
+    expect(calls[0]!.url).toContain('/playlists/tpl1');
+    expect(calls[0]!.url).not.toContain('/relationships/items');
   });
 
   it('searches albums and artists via included resources, and builds their deep links', async () => {
@@ -312,13 +322,21 @@ describe('TidalConnector', () => {
     expect(JSON.parse(calls[0]!.body!).data).toEqual([{ type: 'tracks', id: 't1' }]);
   });
 
-  it('removePlaylistTracks DELETEs only the given ids, unlike clearPlaylist which fetches+deletes everything', async () => {
-    const { fetchImpl, calls } = recorder(() => undefined);
+  it('removePlaylistTracks looks up each item\'s meta.itemId before DELETEing -- TIDAL requires it per entry', async () => {
+    const { fetchImpl, calls } = recorder((_url, method) => {
+      if (method === 'DELETE') return undefined; // 204
+      return {
+        data: [
+          { id: 't1', type: 'tracks', meta: { itemId: 'i1' } },
+          { id: 't2', type: 'tracks', meta: { itemId: 'i2' } },
+        ],
+      };
+    });
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
     await c.removePlaylistTracks!('tpl1', ['t1']);
-    expect(calls).toHaveLength(1); // no preceding GET to fetch existing items
-    expect(calls[0]!.method).toBe('DELETE');
-    expect(JSON.parse(calls[0]!.body!).data).toEqual([{ type: 'tracks', id: 't1' }]);
+    expect(calls.some((c) => c.method === 'GET')).toBe(true); // fetches item refs to get meta.itemId
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(JSON.parse(del.body!).data).toEqual([{ type: 'tracks', id: 't1', meta: { itemId: 'i1' } }]);
   });
 
   it('removePlaylistTracks with an empty list makes no HTTP call', async () => {
@@ -328,39 +346,58 @@ describe('TidalConnector', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('removePlaylistTracks de-duplicates ids -- TIDAL 400s on a repeated {type,id} pair in one DELETE body', async () => {
-    const { fetchImpl, calls } = recorder(() => undefined);
+  it('removePlaylistTracks removes every occurrence of a repeated track, each with its own meta.itemId', async () => {
+    const { fetchImpl, calls } = recorder((_url, method) => {
+      if (method === 'DELETE') return undefined; // 204
+      return {
+        data: [
+          { id: 't1', type: 'tracks', meta: { itemId: 'i1' } },
+          { id: 't1', type: 'tracks', meta: { itemId: 'i1b' } }, // same track, second occurrence
+          { id: 't2', type: 'tracks', meta: { itemId: 'i2' } },
+        ],
+      };
+    });
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
-    await c.removePlaylistTracks!('tpl1', ['t1', 't2', 't1']);
-    expect(calls).toHaveLength(1);
-    expect(JSON.parse(calls[0]!.body!).data).toEqual([
-      { type: 'tracks', id: 't1' },
-      { type: 'tracks', id: 't2' },
+    await c.removePlaylistTracks!('tpl1', ['t1']);
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(JSON.parse(del.body!).data).toEqual([
+      { type: 'tracks', id: 't1', meta: { itemId: 'i1' } },
+      { type: 'tracks', id: 't1', meta: { itemId: 'i1b' } },
     ]);
   });
 
-  it('removePlaylistTracks batches large id lists rather than sending one unbounded request', async () => {
-    const { fetchImpl, calls } = recorder(() => undefined);
+  it('removePlaylistTracks batches large ref lists rather than sending one unbounded request', async () => {
+    const refs = Array.from({ length: 45 }, (_, i) => ({ id: `t${i}`, type: 'tracks', meta: { itemId: `i${i}` } }));
+    const { fetchImpl, calls } = recorder((_url, method) => (method === 'DELETE' ? undefined : { data: refs }));
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
-    const ids = Array.from({ length: 45 }, (_, i) => `t${i}`);
-    await c.removePlaylistTracks!('tpl1', ids);
-    expect(calls).toHaveLength(3); // 45 ids at a batch size of 20
-    expect(calls.every((c) => c.method === 'DELETE')).toBe(true);
-    const sent = calls.flatMap((c) => JSON.parse(c.body!).data.map((d: any) => d.id));
-    expect(sent).toEqual(ids);
+    await c.removePlaylistTracks!(
+      'tpl1',
+      refs.map((r) => r.id),
+    );
+    const deletes = calls.filter((c) => c.method === 'DELETE');
+    expect(deletes).toHaveLength(3); // 45 refs at a batch size of 20
+    const sent = deletes.flatMap((c) => JSON.parse(c.body!).data.map((d: any) => d.id));
+    expect(sent).toEqual(refs.map((r) => r.id));
   });
 
-  it('clearPlaylist de-duplicates fetched ids before deleting (a playlist can list the same track twice)', async () => {
+  it('clearPlaylist deletes every occurrence, even when a playlist lists the same track twice', async () => {
     const { fetchImpl, calls } = recorder((_url, method) => {
       if (method === 'DELETE') return undefined; // 204
-      return { data: [{ id: 't1', type: 'tracks' }, { id: 't1', type: 'tracks' }, { id: 't2', type: 'tracks' }] };
+      return {
+        data: [
+          { id: 't1', type: 'tracks', meta: { itemId: 'i1' } },
+          { id: 't1', type: 'tracks', meta: { itemId: 'i1b' } },
+          { id: 't2', type: 'tracks', meta: { itemId: 'i2' } },
+        ],
+      };
     });
     const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
     await c.clearPlaylist('tpl1');
     const del = calls.find((c) => c.method === 'DELETE')!;
     expect(JSON.parse(del.body!).data).toEqual([
-      { type: 'tracks', id: 't1' },
-      { type: 'tracks', id: 't2' },
+      { type: 'tracks', id: 't1', meta: { itemId: 'i1' } },
+      { type: 'tracks', id: 't1', meta: { itemId: 'i1b' } },
+      { type: 'tracks', id: 't2', meta: { itemId: 'i2' } },
     ]);
   });
 });

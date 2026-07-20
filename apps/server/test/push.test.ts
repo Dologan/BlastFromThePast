@@ -50,6 +50,9 @@ class FakeConnector implements ServiceConnector {
     this.cleared = true;
     this.addedIds = [];
   }
+  /** Only set on a per-test subclass/instance that opts into the delete+recreate replace path. */
+  deletePlaylist?(id: string): Promise<void>;
+  deletedIds: string[] = [];
   deepLinkTrack(id: string) {
     return `https://open.spotify.com/track/${id}`;
   }
@@ -252,6 +255,31 @@ describe('pushPlaylist', () => {
     );
     expect(connector.cleared).toBe(true);
     expect(result.matchedCount).toBe(0);
+  });
+
+  it('replace mode deletes and recreates the playlist instead of clearing, when the connector supports deletePlaylist', async () => {
+    const t1 = addTrack('Opeth', 'Windowpane');
+    connector.byQuery.set('opeth|windowpane', { serviceId: 'sp-1', name: 'Windowpane', artistName: 'Opeth' });
+    connector.deletePlaylist = async (id: string) => {
+      connector.deletedIds.push(id);
+    };
+
+    const result = await pushPlaylist(
+      handle,
+      connector,
+      'spotify',
+      'Existing',
+      'd',
+      [{ trackId: t1, name: 'Windowpane', artistName: 'Opeth' }],
+      undefined,
+      { mode: 'replace', existingPlaylistId: 'PL_OLD' },
+    );
+
+    expect(connector.deletedIds).toEqual(['PL_OLD']); // old playlist deleted, not cleared in place
+    expect(connector.cleared).toBe(false);
+    expect(connector.createdName).toBe('Existing'); // a fresh playlist was created
+    expect(connector.addedIds).toEqual(['sp-1']);
+    expect(result.playlistId).toBe('PL1'); // the new playlist's id, not the old one
   });
 
   it('append mode skips tracks already in the playlist and reports how many were skipped', async () => {

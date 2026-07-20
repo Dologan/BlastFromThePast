@@ -62,6 +62,9 @@ export interface ServiceConnector {
   /** Empties a playlist so it can be fully replaced via setPlaylistTracks. Optional;
    * connectors whose setPlaylistTracks already replaces outright (Spotify) don't need it. */
   clearPlaylist?(playlistId: string): Promise<void>;
+  /** Deletes a playlist outright. Optional; where available, a full-contents 'replace'
+   * push prefers delete + createPlaylist over clearPlaylist + setPlaylistTracks. */
+  deletePlaylist?(playlistId: string): Promise<void>;
   /** Adds tracks to a playlist WITHOUT ever replacing existing contents -- unlike
    * setPlaylistTracks, whose first batch may replace on some implementations (Spotify).
    * Used to add a single corrected match into an already-pushed playlist. */

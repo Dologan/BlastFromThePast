@@ -115,10 +115,19 @@ export async function pushPlaylist(
   if (mode !== 'new' && opts.existingPlaylistId) {
     playlistId = opts.existingPlaylistId;
     if (mode === 'replace') {
-      // Connectors whose setPlaylistTracks only appends (TIDAL) need an
-      // explicit clear first; ones that already fully replace (Spotify)
-      // don't implement clearPlaylist at all.
-      await connector.clearPlaylist?.(playlistId);
+      if (connector.deletePlaylist) {
+        // Prefer delete + recreate over clearing an existing playlist in place:
+        // it avoids needing to enumerate and remove every existing item, and
+        // sidesteps connector-specific quirks of the item-removal endpoint (e.g.
+        // TIDAL requiring a per-item meta.itemId to disambiguate occurrences).
+        await connector.deletePlaylist(playlistId);
+        playlistId = await connector.createPlaylist(name, description);
+      } else {
+        // Connectors whose setPlaylistTracks only appends need an explicit
+        // clear first; ones that already fully replace (Spotify) don't
+        // implement clearPlaylist at all.
+        await connector.clearPlaylist?.(playlistId);
+      }
     } else if (connector.getPlaylistTrackIds) {
       const existing = new Set(await connector.getPlaylistTrackIds(playlistId));
       const kept: { id: string; trackId: number }[] = [];
