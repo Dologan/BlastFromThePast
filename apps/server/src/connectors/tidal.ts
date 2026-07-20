@@ -4,6 +4,7 @@ import { SERVICE_CONFIG } from '../auth/serviceConfig.js';
 import { chunk, ConnectorError, fetchWithRetry, sleep, type ConnectorFetch } from './http.js';
 
 const REMOVE_LIKED_BATCH_SIZE = 20; // No documented max was found -- conservative default.
+const PLAYLIST_ITEMS_BATCH_SIZE = 20; // Same conservative default for playlist item add/remove.
 // TIDAL's docs don't publish a numeric rate limit, so this is a conservative
 // generic throttle (~2.85 req/s) rather than one tuned to a published number;
 // fetchWithRetry additionally backs off on any 429 that still gets through.
@@ -180,10 +181,17 @@ export class TidalConnector implements ServiceConnector {
 
   /** Removes specific tracks from a playlist (unlike clearPlaylist, which empties it entirely). */
   async removePlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
-    if (serviceTrackIds.length === 0) return;
-    await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
-      data: serviceTrackIds.map((id) => ({ type: 'tracks', id })),
-    });
+    // De-duplicate: TIDAL's relationship-delete schema rejects a repeated
+    // {type,id} pair in the same request body (observed: "data/N/meta must
+    // not be null" on the second occurrence) rather than treating it as a
+    // no-op, so a track listed twice must only be sent once.
+    const ids = [...new Set(serviceTrackIds)];
+    for (const batch of chunk(ids, PLAYLIST_ITEMS_BATCH_SIZE)) {
+      if (batch.length === 0) continue;
+      await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
+        data: batch.map((id) => ({ type: 'tracks', id })),
+      });
+    }
   }
 
   /** Track ids currently in the playlist, for append-mode de-duplication. */
@@ -208,9 +216,7 @@ export class TidalConnector implements ServiceConnector {
   async clearPlaylist(playlistId: string): Promise<void> {
     const ids = await this.getPlaylistTrackIds(playlistId);
     if (ids.length === 0) return;
-    await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
-      data: ids.map((id) => ({ type: 'tracks', id })),
-    });
+    await this.removePlaylistTracks(playlistId, ids);
   }
 
   /** Paginated liked tracks via the `userCollectionTracks` resource. */

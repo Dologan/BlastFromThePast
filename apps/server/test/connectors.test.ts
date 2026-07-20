@@ -327,6 +327,42 @@ describe('TidalConnector', () => {
     await c.removePlaylistTracks!('tpl1', []);
     expect(calls).toHaveLength(0);
   });
+
+  it('removePlaylistTracks de-duplicates ids -- TIDAL 400s on a repeated {type,id} pair in one DELETE body', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.removePlaylistTracks!('tpl1', ['t1', 't2', 't1']);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.body!).data).toEqual([
+      { type: 'tracks', id: 't1' },
+      { type: 'tracks', id: 't2' },
+    ]);
+  });
+
+  it('removePlaylistTracks batches large id lists rather than sending one unbounded request', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    const ids = Array.from({ length: 45 }, (_, i) => `t${i}`);
+    await c.removePlaylistTracks!('tpl1', ids);
+    expect(calls).toHaveLength(3); // 45 ids at a batch size of 20
+    expect(calls.every((c) => c.method === 'DELETE')).toBe(true);
+    const sent = calls.flatMap((c) => JSON.parse(c.body!).data.map((d: any) => d.id));
+    expect(sent).toEqual(ids);
+  });
+
+  it('clearPlaylist de-duplicates fetched ids before deleting (a playlist can list the same track twice)', async () => {
+    const { fetchImpl, calls } = recorder((_url, method) => {
+      if (method === 'DELETE') return undefined; // 204
+      return { data: [{ id: 't1', type: 'tracks' }, { id: 't1', type: 'tracks' }, { id: 't2', type: 'tracks' }] };
+    });
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.clearPlaylist('tpl1');
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(JSON.parse(del.body!).data).toEqual([
+      { type: 'tracks', id: 't1' },
+      { type: 'tracks', id: 't2' },
+    ]);
+  });
 });
 
 describe('TIDAL request retry-with-backoff on 429/503', () => {
