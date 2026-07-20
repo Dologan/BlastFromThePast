@@ -62,6 +62,13 @@ export interface ServiceConnector {
   /** Empties a playlist so it can be fully replaced via setPlaylistTracks. Optional;
    * connectors whose setPlaylistTracks already replaces outright (Spotify) don't need it. */
   clearPlaylist?(playlistId: string): Promise<void>;
+  /** Adds tracks to a playlist WITHOUT ever replacing existing contents -- unlike
+   * setPlaylistTracks, whose first batch may replace on some implementations (Spotify).
+   * Used to add a single corrected match into an already-pushed playlist. */
+  appendPlaylistTracks?(playlistId: string, serviceTrackIds: string[]): Promise<void>;
+  /** Removes specific tracks from a playlist by service track id, leaving the rest
+   * untouched -- unlike clearPlaylist, which empties it entirely. */
+  removePlaylistTracks?(playlistId: string, serviceTrackIds: string[]): Promise<void>;
   /** Liked tracks, where the service exposes them. */
   getLikedTracks?(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }>;
   /** Removes tracks from the user's liked/favorite tracks, where the service supports it. */

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SpotifyConnector } from '../src/connectors/spotify.js';
 import { TidalConnector } from '../src/connectors/tidal.js';
 import type { ConnectorFetch } from '../src/connectors/http.js';
@@ -22,6 +22,29 @@ function recorder(responder: (url: string, method: string) => unknown): {
       status: body === undefined ? 204 : 200,
       json: async () => body,
       text: async () => (body === undefined ? '' : JSON.stringify(body)),
+    };
+  };
+  return { fetchImpl, calls };
+}
+
+/** A fetch fake that plays back a fixed sequence of responses (status/body/headers),
+ * repeating the last one for any calls beyond the queue -- for retry/backoff tests. */
+function queueResponder(steps: { status: number; body?: unknown; headers?: Record<string, string> }[]): {
+  fetchImpl: ConnectorFetch;
+  calls: Recorded[];
+} {
+  const calls: Recorded[] = [];
+  let i = 0;
+  const fetchImpl: ConnectorFetch = async (url, init) => {
+    calls.push({ url, method: init.method, body: init.body });
+    const step = steps[Math.min(i, steps.length - 1)]!;
+    i++;
+    return {
+      ok: step.status >= 200 && step.status < 300,
+      status: step.status,
+      headers: { get: (name: string) => step.headers?.[name.toLowerCase()] ?? null },
+      json: async () => step.body,
+      text: async () => (step.body === undefined ? '' : JSON.stringify(step.body)),
     };
   };
   return { fetchImpl, calls };
@@ -113,6 +136,33 @@ describe('SpotifyConnector', () => {
     expect(artists[0]).toEqual({ serviceId: 'ar1', name: 'Opeth' });
 
     expect(c.deepLinkArtist('ar1')).toBe('https://open.spotify.com/artist/ar1');
+  });
+
+  it('appendPlaylistTracks always POSTs, even for a single track, unlike setPlaylistTracks', async () => {
+    const { fetchImpl, calls } = recorder(() => ({}));
+    const c = new SpotifyConnector(token, () => true, fetchImpl);
+    await c.appendPlaylistTracks!('pl1', ['t1']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('POST');
+    expect(JSON.parse(calls[0]!.body!).uris).toEqual(['spotify:track:t1']);
+  });
+
+  it('appendPlaylistTracks batches >100 tracks, all as POST', async () => {
+    const { fetchImpl, calls } = recorder(() => ({}));
+    const c = new SpotifyConnector(token, () => true, fetchImpl);
+    const ids = Array.from({ length: 150 }, (_, i) => `t${i}`);
+    await c.appendPlaylistTracks!('pl1', ids);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((c) => c.method === 'POST')).toBe(true);
+  });
+
+  it('removePlaylistTracks issues a DELETE with the track uris', async () => {
+    const { fetchImpl, calls } = recorder(() => ({}));
+    const c = new SpotifyConnector(token, () => true, fetchImpl);
+    await c.removePlaylistTracks!('pl1', ['t1', 't2']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('DELETE');
+    expect(JSON.parse(calls[0]!.body!).tracks).toEqual([{ uri: 'spotify:track:t1' }, { uri: 'spotify:track:t2' }]);
   });
 });
 
@@ -220,5 +270,117 @@ describe('TidalConnector', () => {
     expect(artists[0]).toEqual({ serviceId: 'a1', name: 'Opeth' });
 
     expect(c.deepLinkArtist('a1')).toBe('https://tidal.com/browse/artist/a1');
+  });
+
+  it('searches via the paginated /relationships/tracks endpoint, not the unpaginated base endpoint', async () => {
+    const { fetchImpl, calls } = recorder((url) => {
+      if (url.includes('page[cursor]=CURSOR1')) {
+        return { included: [{ type: 'tracks', id: 't2', attributes: { title: 'Second Page Match' } }] };
+      }
+      return {
+        included: [{ type: 'tracks', id: 't1', attributes: { title: 'First Page' } }],
+        links: { meta: { nextCursor: 'CURSOR1' } },
+      };
+    });
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    const res = await c.searchTrack({ artistName: 'At the Gates', trackName: 'World of Lies' });
+    expect(calls[0]!.url).toContain('/relationships/tracks');
+    expect(calls[0]!.url).not.toMatch(/searchResults\/[^/]+\?/); // not the base endpoint
+    // Both pages' results are considered as candidates, not just the first.
+    expect(res.map((t) => t.serviceId)).toEqual(['t1', 't2']);
+  });
+
+  it('stops paginating search results after SEARCH_MAX_PAGES even if more pages exist', async () => {
+    const { fetchImpl, calls } = recorder((url) => {
+      const cursor = url.includes('page[cursor]=') ? url.split('page[cursor]=')[1] : '0';
+      return {
+        included: [{ type: 'tracks', id: `t${cursor}`, attributes: { title: 'X' } }],
+        links: { meta: { nextCursor: String(Number(cursor) + 1) } }, // always another page available
+      };
+    });
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    await c.searchTrack({ artistName: 'A', trackName: 'B' });
+    expect(calls.length).toBe(3); // capped, not infinite
+  });
+
+  it('appendPlaylistTracks adds without fetching or touching existing items', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.appendPlaylistTracks!('tpl1', ['t1']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe('POST');
+    expect(JSON.parse(calls[0]!.body!).data).toEqual([{ type: 'tracks', id: 't1' }]);
+  });
+
+  it('removePlaylistTracks DELETEs only the given ids, unlike clearPlaylist which fetches+deletes everything', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.removePlaylistTracks!('tpl1', ['t1']);
+    expect(calls).toHaveLength(1); // no preceding GET to fetch existing items
+    expect(calls[0]!.method).toBe('DELETE');
+    expect(JSON.parse(calls[0]!.body!).data).toEqual([{ type: 'tracks', id: 't1' }]);
+  });
+
+  it('removePlaylistTracks with an empty list makes no HTTP call', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.removePlaylistTracks!('tpl1', []);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('TIDAL request retry-with-backoff on 429/503', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('retries once on 429 then succeeds', async () => {
+    const { fetchImpl, calls } = queueResponder([
+      { status: 429 },
+      { status: 200, body: { included: [{ type: 'tracks', id: 't1', attributes: { title: 'Song' } }] } },
+    ]);
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    const promise = c.searchTrack({ artistName: 'A', trackName: 'B' });
+    await vi.runAllTimersAsync();
+    const res = await promise;
+    expect(calls.length).toBe(2);
+    expect(res[0]!.name).toBe('Song');
+  });
+
+  it('honors a numeric Retry-After header instead of the default backoff', async () => {
+    const { fetchImpl, calls } = queueResponder([
+      { status: 429, headers: { 'retry-after': '2' } },
+      { status: 200, body: { included: [] } },
+    ]);
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    const promise = c.searchTrack({ artistName: 'A', trackName: 'B' });
+    await vi.advanceTimersByTimeAsync(2000);
+    await promise;
+    expect(calls.length).toBe(2);
+  });
+
+  it('retries on 503 the same way as 429', async () => {
+    const { fetchImpl, calls } = queueResponder([{ status: 503 }, { status: 200, body: { included: [] } }]);
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    const promise = c.searchTrack({ artistName: 'A', trackName: 'B' });
+    await vi.runAllTimersAsync();
+    await promise;
+    expect(calls.length).toBe(2);
+  });
+
+  it('gives up after exhausting retries and throws a ConnectorError carrying the status', async () => {
+    const { fetchImpl, calls } = queueResponder([{ status: 429, body: { errors: [{ detail: 'Rate limit exceeded' }] } }]);
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    const promise = c.searchTrack({ artistName: 'A', trackName: 'B' }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const err = (await promise) as { status?: number; message: string };
+    expect(err.status).toBe(429);
+    expect(calls.length).toBe(5); // 1 initial + 4 retries
+  });
+
+  it('does not retry on a non-retryable error status (e.g. 401)', async () => {
+    const { fetchImpl, calls } = queueResponder([{ status: 401, body: { errors: [{ detail: 'unauthorized' }] } }]);
+    const c = new TidalConnector(token, () => true, 'US', fetchImpl);
+    await expect(c.searchTrack({ artistName: 'A', trackName: 'B' })).rejects.toThrow(/401/);
+    expect(calls.length).toBe(1);
   });
 });

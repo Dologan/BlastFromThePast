@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   api,
   type AuthStatus,
-  type Candidate,
   type ExistingPlaylist,
   type Facets,
   type Preset,
@@ -11,7 +10,6 @@ import {
   type PushResult,
   type SavedRecipe,
   type ServiceName,
-  type UnmatchedTrack,
 } from './api';
 import {
   SORT_LABELS,
@@ -23,6 +21,7 @@ import {
 } from './recipeTypes';
 import { countryName } from './countries';
 import { ChipInput, DateRangeInput, DaysInput, SliderField } from './components/clauseEditors';
+import { MatchFixup } from './components/matchFixup';
 
 const CLAUSE_LABELS: Record<ClauseType, string> = {
   genre: 'Genre',
@@ -282,94 +281,6 @@ function ResultsList({
   );
 }
 
-function FixupRow({
-  service,
-  track,
-  fixed,
-  onFixed,
-}: {
-  service: ServiceName;
-  track: UnmatchedTrack;
-  fixed: boolean;
-  onFixed: (trackId: number) => void;
-}) {
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const find = async () => {
-    setLoading(true);
-    try {
-      const { candidates } = await api.getCandidates(service, track.trackId);
-      setCandidates(candidates);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const pick = async (c: Candidate) => {
-    await api.overrideMatch(service, track.trackId, c.serviceId);
-    onFixed(track.trackId);
-  };
-
-  return (
-    <li>
-      <span>
-        {track.name} <span className="hint">— {track.artistName}</span>
-      </span>{' '}
-      {fixed ? (
-        <span className="hint">✓ matched</span>
-      ) : candidates ? (
-        candidates.length === 0 ? (
-          <span className="hint">no candidates</span>
-        ) : (
-          <span className="candidates">
-            {candidates.slice(0, 4).map((c) => (
-              <button key={c.serviceId} className="link" onClick={() => pick(c)} title={`${c.name} — ${c.artistName}`}>
-                {c.name} · {c.artistName}
-              </button>
-            ))}
-          </span>
-        )
-      ) : (
-        <button className="link" onClick={find} disabled={loading}>
-          {loading ? 'searching…' : 'find match'}
-        </button>
-      )}
-    </li>
-  );
-}
-
-function MatchFixup({
-  result,
-  fixed,
-  onFixed,
-}: {
-  result: PushResult;
-  fixed: Set<number>;
-  onFixed: (trackId: number) => void;
-}) {
-  const rows = [...result.unmatched, ...result.lowConfidence];
-  if (rows.length === 0) return null;
-  return (
-    <div className="fixup">
-      <h3>Fix matches</h3>
-      <p className="hint">
-        These tracks didn't match cleanly. Pick the right result to add it and remember the choice.
-      </p>
-      <ul className="fixup-list">
-        {rows.map((t) => (
-          <FixupRow
-            key={t.trackId}
-            service={result.service}
-            track={t}
-            fixed={fixed.has(t.trackId)}
-            onFixed={onFixed}
-          />
-        ))}
-      </ul>
-    </div>
-  );
-}
 
 export default function RecipeBuilder() {
   const [facets, setFacets] = useState<Facets | null>(null);
@@ -388,7 +299,6 @@ export default function RecipeBuilder() {
   const [pushResult, setPushResult] = useState<PushResult | null>(null);
   const [pushing, setPushing] = useState<ServiceName | null>(null);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
-  const [fixed, setFixed] = useState<Set<number>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [conflict, setConflict] = useState<{ service: ServiceName; existing: ExistingPlaylist } | null>(null);
 
@@ -423,7 +333,6 @@ export default function RecipeBuilder() {
     const playlistName = name.trim() || 'Blast From The Past';
     setPushing(service);
     setPushResult(null);
-    setFixed(new Set());
     setPushMsg(
       mode === 'replace'
         ? `Replacing "${playlistName}" on ${service}…`
@@ -771,9 +680,14 @@ export default function RecipeBuilder() {
         )}
         {pushResult && (
           <MatchFixup
-            result={pushResult}
-            fixed={fixed}
-            onFixed={(trackId) => setFixed((prev) => new Set(prev).add(trackId))}
+            service={pushResult.service}
+            playlistId={pushResult.playlistId}
+            unmatched={pushResult.unmatched}
+            lowConfidence={pushResult.lowConfidence}
+            onTrackFixed={(_trackId, action) => {
+              if (action !== 'added') return;
+              setPushResult((prev) => (prev ? { ...prev, matchedCount: prev.matchedCount + 1 } : prev));
+            }}
           />
         )}
         <ResultsList result={result} selected={selected} onToggle={toggleSelected} />

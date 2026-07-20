@@ -87,6 +87,14 @@ export interface Candidate {
   albumName?: string;
 }
 
+export type OverrideAction = 'added' | 'replaced' | 'unchanged' | 'savedOnly';
+
+export interface OverrideResult {
+  action: OverrideAction;
+  /** Set if the match was saved but the live playlist couldn't be updated (e.g. a transient service error). */
+  playlistError?: string;
+}
+
 export interface SyncProgress {
   phase: 'scrobbles' | 'loved' | 'stats';
   page?: number;
@@ -405,11 +413,15 @@ export const api = {
   getPresets: () => request<Preset[]>('/api/presets'),
   getCandidates: (service: ServiceName, trackId: number) =>
     request<{ candidates: Candidate[] }>(`/api/match/candidates?service=${service}&trackId=${trackId}`),
-  overrideMatch: (service: ServiceName, trackId: number, serviceId: string) =>
-    request<void>('/api/match/override', {
+  /** Saves a chosen match and, when playlistId is given, also mutates that live
+   * playlist: appends it (alreadyInPlaylist false/omitted -- the track was
+   * unmatched) or removes the old id and appends the new one (alreadyInPlaylist
+   * true -- the track was a low-confidence match already sitting in the playlist). */
+  overrideMatch: (service: ServiceName, trackId: number, serviceId: string, playlistId?: string, alreadyInPlaylist?: boolean) =>
+    request<OverrideResult>('/api/match/override', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service, trackId, serviceId }),
+      body: JSON.stringify({ service, trackId, serviceId, playlistId, alreadyInPlaylist }),
     }),
 
   resolveDeepLinks: (service: ServiceName, items: { kind: LinkEntityKind; entityId: number }[]) =>

@@ -85,6 +85,25 @@ export class SpotifyConnector implements ServiceConnector {
     }
   }
 
+  /** Adds tracks without ever replacing existing contents -- unlike setPlaylistTracks,
+   * whose first batch replaces (PUT); this always POSTs. */
+  async appendPlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
+    const uris = serviceTrackIds.map((id) => `spotify:track:${id}`);
+    for (const batch of chunk(uris, MAX_TRACKS_PER_REQUEST)) {
+      if (batch.length === 0) continue;
+      await authedJson(this.fetchImpl, this.getToken, 'POST', `${API}/playlists/${playlistId}/tracks`, { uris: batch });
+    }
+  }
+
+  /** Removes specific tracks from a playlist, leaving the rest untouched. */
+  async removePlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
+    const tracks = serviceTrackIds.map((id) => ({ uri: `spotify:track:${id}` }));
+    for (const batch of chunk(tracks, MAX_TRACKS_PER_REQUEST)) {
+      if (batch.length === 0) continue;
+      await authedJson(this.fetchImpl, this.getToken, 'DELETE', `${API}/playlists/${playlistId}/tracks`, { tracks: batch });
+    }
+  }
+
   /** Track ids currently in the playlist, for append-mode de-duplication. */
   async getPlaylistTrackIds(playlistId: string): Promise<string[]> {
     const ids: string[] = [];

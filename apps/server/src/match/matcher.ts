@@ -27,6 +27,12 @@ export class ServiceMatcher {
     private readonly service: ServiceName,
   ) {}
 
+  /** The currently cached match for a track, if any -- read before overriding
+   * to know what (if anything) needs to be removed from an already-pushed playlist. */
+  getCached(trackId: number): MatchResult | null {
+    return this.cached(trackId);
+  }
+
   private cached(trackId: number): MatchResult | null {
     const row = this.handle.sqlite
       .prepare(

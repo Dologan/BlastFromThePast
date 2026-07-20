@@ -653,14 +653,53 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return { candidates: await matcher.candidates(trackId) };
   });
 
+  /**
+   * Saves a human-chosen match, and -- when `playlistId` is given -- also
+   * mutates that live playlist so "matched" actually means something concrete:
+   * `alreadyInPlaylist: true` (the track was a low-confidence match, already
+   * added under the wrong id) removes the old id and appends the corrected
+   * one; `false`/omitted (the track was unmatched, never added) just appends.
+   * Without `playlistId` the override is cache-only (e.g. used outside a push
+   * context), matching the old behaviour.
+   */
   app.post('/api/match/override', async (req, reply) => {
-    const body = req.body as { service?: string; trackId?: number; serviceId?: string };
+    const body = req.body as {
+      service?: string;
+      trackId?: number;
+      serviceId?: string;
+      playlistId?: string;
+      alreadyInPlaylist?: boolean;
+    };
     const service = body.service ? parseService(body.service) : null;
     if (!service || !body.trackId || !body.serviceId) {
       return reply.code(400).send({ error: 'service, trackId and serviceId are required.' });
     }
-    new ServiceMatcher(handle, makeConnector(service), service).setOverride(body.trackId, body.serviceId);
-    reply.code(204);
+    const connector = makeConnector(service);
+    const matcher = new ServiceMatcher(handle, connector, service);
+    const previous = body.playlistId ? matcher.getCached(body.trackId) : null;
+    matcher.setOverride(body.trackId, body.serviceId);
+
+    let action: 'added' | 'replaced' | 'unchanged' | 'savedOnly' = 'savedOnly';
+    let playlistError: string | undefined;
+    if (body.playlistId && connector.appendPlaylistTracks) {
+      try {
+        if (body.alreadyInPlaylist) {
+          if (previous && previous.serviceId !== body.serviceId) {
+            await connector.removePlaylistTracks?.(body.playlistId, [previous.serviceId]);
+            await connector.appendPlaylistTracks(body.playlistId, [body.serviceId]);
+            action = 'replaced';
+          } else {
+            action = 'unchanged';
+          }
+        } else {
+          await connector.appendPlaylistTracks(body.playlistId, [body.serviceId]);
+          action = 'added';
+        }
+      } catch (err) {
+        playlistError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return { action, ...(playlistError ? { playlistError } : {}) };
   });
 
   // ---- Deep links (Insights / Top artists -> resolved streaming-service entries) ----

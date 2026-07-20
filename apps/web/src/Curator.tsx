@@ -9,6 +9,7 @@ import {
   type GroupBy,
   type LikedSource,
   type OnExisting,
+  type OverrideAction,
   type PlaylistInventory,
   type ServiceName,
   type Settings,
@@ -17,6 +18,7 @@ import {
 } from './api';
 import type { Clause, Recipe } from './recipeTypes';
 import { DateRangeInput, DaysInput, SliderField } from './components/clauseEditors';
+import { MatchFixup } from './components/matchFixup';
 
 const SERVICE_LABEL: Record<ServiceName, string> = { spotify: 'Spotify', tidal: 'TIDAL' };
 
@@ -133,7 +135,8 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
   const [deselectedTracks, setDeselectedTracks] = useState<Record<string, Set<number>>>({});
   const [conflicts, setConflicts] = useState<Record<string, ExistingPlaylist | null>>({});
   const [service, setService] = useState<ServiceName | ''>(settings.defaultService ?? '');
-  const [onExisting, setOnExisting] = useState<OnExisting>('skip');
+  const [onExisting, setOnExisting] = useState<OnExisting>('append');
+  const [confirmingReplace, setConfirmingReplace] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [pushResults, setPushResults] = useState<{ name: string; outcome: CuratePushOutcome }[] | null>(null);
@@ -229,6 +232,11 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
 
   const push = async () => {
     if (!service || !preview) return;
+    if (onExisting === 'replace' && !confirmingReplace) {
+      setConfirmingReplace(true);
+      return;
+    }
+    setConfirmingReplace(false);
     const playlists = preview.groups
       .filter((g) => selectedGroups.has(g.key))
       .map((g) => ({ name: g.name, trackIds: g.entityIds.filter((id) => !(deselectedTracks[g.key]?.has(id))) }))
@@ -255,6 +263,18 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
     } finally {
       setPushing(false);
     }
+  };
+
+  const handleTrackFixed = (playlistIndex: number, trackId: number, action: OverrideAction) => {
+    if (action !== 'added') return;
+    setPushResults((prev) => {
+      if (!prev) return prev;
+      const entry = prev[playlistIndex];
+      if (!entry || 'skipped' in entry.outcome) return prev;
+      const next = [...prev];
+      next[playlistIndex] = { ...entry, outcome: { ...entry.outcome, matchedCount: entry.outcome.matchedCount + 1 } };
+      return next;
+    });
   };
 
   return (
@@ -411,10 +431,16 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
           </label>
           <label className="inline">
             If a playlist exists
-            <select value={onExisting} onChange={(e) => setOnExisting(e.target.value as OnExisting)}>
+            <select
+              value={onExisting}
+              onChange={(e) => {
+                setOnExisting(e.target.value as OnExisting);
+                setConfirmingReplace(false);
+              }}
+            >
+              <option value="append">add to it</option>
               <option value="skip">skip it</option>
               <option value="replace">replace its contents</option>
-              <option value="append">add to it</option>
             </select>
           </label>
           <button onClick={push} disabled={pushing || !service || selectedGroups.size === 0}>
@@ -423,6 +449,23 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
         </div>
       )}
       {connected.length === 0 && <p className="hint">Connect Spotify or TIDAL on the Dashboard to push playlists.</p>}
+      {confirmingReplace && (
+        <div className="conflict-box">
+          <p>
+            Any of the {selectedGroups.size} selected playlist{selectedGroups.size === 1 ? '' : 's'} that already
+            exists on {service && SERVICE_LABEL[service]} will have its contents fully replaced, not added to. This
+            can't be undone. Continue?
+          </p>
+          <div className="conflict-actions">
+            <button onClick={push} disabled={pushing}>
+              Yes, replace
+            </button>
+            <button className="secondary" onClick={() => setConfirmingReplace(false)} disabled={pushing}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {pushMsg && <p className="hint">{pushMsg}</p>}
       {pushResults && (
         <ul className="curate-results">
@@ -438,6 +481,13 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
                 </a>{' '}
                 — {outcome.matchedCount} track{outcome.matchedCount === 1 ? '' : 's'}
                 {outcome.unmatched.length > 0 && `, ${outcome.unmatched.length} unmatched`}
+                <MatchFixup
+                  service={outcome.service}
+                  playlistId={outcome.playlistId}
+                  unmatched={outcome.unmatched}
+                  lowConfidence={outcome.lowConfidence}
+                  onTrackFixed={(trackId, action) => handleTrackFixed(i, trackId, action)}
+                />
               </li>
             ),
           )}

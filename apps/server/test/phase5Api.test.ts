@@ -6,6 +6,8 @@ import type { ServiceConnector, ServiceTrack, TrackQuery } from '@bftp/core';
 
 class FakeConnector implements ServiceConnector {
   readonly service = 'spotify' as const;
+  appended: string[][] = [];
+  removed: string[][] = [];
   async isAuthorized() {
     return true;
   }
@@ -19,6 +21,12 @@ class FakeConnector implements ServiceConnector {
     return 'PL';
   }
   async setPlaylistTracks() {}
+  async appendPlaylistTracks(_playlistId: string, ids: string[]) {
+    this.appended.push(ids);
+  }
+  async removePlaylistTracks(_playlistId: string, ids: string[]) {
+    this.removed.push(ids);
+  }
   deepLinkTrack(id: string) {
     return id;
   }
@@ -67,10 +75,79 @@ describe('presets + match fix-up API', () => {
       url: '/api/match/override',
       payload: { service: 'spotify', trackId, serviceId: 'cand-b' },
     });
-    expect(ov.statusCode).toBe(204);
+    expect(ov.statusCode).toBe(200);
+    // No playlistId given -> cache-only, matching the old (pre-fix-up-mutation) behaviour.
+    expect(ov.json()).toEqual({ action: 'savedOnly' });
 
     const link = s.prepare("SELECT service_id, method, confidence, verified FROM service_links WHERE entity_id = ? AND service = 'spotify'").get(trackId) as any;
     expect(link).toEqual({ service_id: 'cand-b', method: 'manual', confidence: 1, verified: 1 });
+    await app.close();
+  });
+
+  it('overriding an unmatched track (alreadyInPlaylist omitted) appends it to the playlist', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const artist = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const trackId = Number(s.prepare("INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, 'Harvest','harvest')").run(artist).lastInsertRowid);
+    const connector = new FakeConnector();
+    const app = buildApp({ handle, authManager: { isAuthorized: () => true } as unknown as AuthManager, createConnector: () => connector });
+
+    const ov = await app.inject({
+      method: 'POST',
+      url: '/api/match/override',
+      payload: { service: 'spotify', trackId, serviceId: 'cand-b', playlistId: 'PL1' },
+    });
+    expect(ov.json()).toEqual({ action: 'added' });
+    expect(connector.appended).toEqual([['cand-b']]);
+    expect(connector.removed).toEqual([]);
+    await app.close();
+  });
+
+  it('overriding a low-confidence track (alreadyInPlaylist: true) removes the old id and appends the corrected one', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const artist = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const trackId = Number(s.prepare("INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, 'Harvest','harvest')").run(artist).lastInsertRowid);
+    const connector = new FakeConnector();
+    const app = buildApp({ handle, authManager: { isAuthorized: () => true } as unknown as AuthManager, createConnector: () => connector });
+
+    // Simulate the original (wrong, low-confidence) match already cached from the push.
+    s.prepare(
+      `INSERT INTO service_links (entity_type, entity_id, service, service_id, method, confidence, verified, matched_at)
+       VALUES ('track', ?, 'spotify', 'cand-a', 'search', 0.3, 0, 0)`,
+    ).run(trackId);
+
+    const ov = await app.inject({
+      method: 'POST',
+      url: '/api/match/override',
+      payload: { service: 'spotify', trackId, serviceId: 'cand-b', playlistId: 'PL1', alreadyInPlaylist: true },
+    });
+    expect(ov.json()).toEqual({ action: 'replaced' });
+    expect(connector.removed).toEqual([['cand-a']]);
+    expect(connector.appended).toEqual([['cand-b']]);
+    await app.close();
+  });
+
+  it('overriding to the same id it was already cached as is a no-op on the playlist', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const artist = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const trackId = Number(s.prepare("INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, 'Harvest','harvest')").run(artist).lastInsertRowid);
+    const connector = new FakeConnector();
+    const app = buildApp({ handle, authManager: { isAuthorized: () => true } as unknown as AuthManager, createConnector: () => connector });
+    s.prepare(
+      `INSERT INTO service_links (entity_type, entity_id, service, service_id, method, confidence, verified, matched_at)
+       VALUES ('track', ?, 'spotify', 'cand-b', 'search', 0.3, 0, 0)`,
+    ).run(trackId);
+
+    const ov = await app.inject({
+      method: 'POST',
+      url: '/api/match/override',
+      payload: { service: 'spotify', trackId, serviceId: 'cand-b', playlistId: 'PL1', alreadyInPlaylist: true },
+    });
+    expect(ov.json()).toEqual({ action: 'unchanged' });
+    expect(connector.removed).toEqual([]);
+    expect(connector.appended).toEqual([]);
     await app.close();
   });
 

@@ -580,14 +580,50 @@ input[type='range'] {
   padding-left: 0;
 }
 
-.fixup-list li {
-  margin-bottom: 0.4rem;
+.fixup-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.fixup-row:first-child {
+  border-top: none;
+}
+
+.fixup-track {
+  min-width: 0;
+}
+
+.fixup-status {
+  display: block;
 }
 
 .candidates {
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.4rem;
+}
+
+.candidate-chip {
+  background: var(--surface-inset);
+  color: inherit;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  font-weight: 500;
+  font-size: 0.9em;
+  text-align: left;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* ---- Dashboard stats & insights ---- */

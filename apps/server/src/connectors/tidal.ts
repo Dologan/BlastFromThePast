@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { AlbumQuery, ArtistQuery, ServiceAlbum, ServiceArtist, ServiceConnector, ServiceTrack, TrackQuery } from '@bftp/core';
 import { SERVICE_CONFIG } from '../auth/serviceConfig.js';
-import { chunk, ConnectorError, type ConnectorFetch } from './http.js';
+import { chunk, ConnectorError, fetchWithRetry, sleep, type ConnectorFetch } from './http.js';
 
 const REMOVE_LIKED_BATCH_SIZE = 20; // No documented max was found -- conservative default.
+// TIDAL's docs don't publish a numeric rate limit, so this is a conservative
+// generic throttle (~2.85 req/s) rather than one tuned to a published number;
+// fetchWithRetry additionally backs off on any 429 that still gets through.
+const MIN_REQUEST_INTERVAL_MS = 350;
+const SEARCH_MAX_PAGES = 3; // candidates to consider per search, across pages
 
 const API = SERVICE_CONFIG.tidal.apiBase;
 const JSON_API = 'application/vnd.api+json';
@@ -35,6 +40,7 @@ function includedTrack(id: string, included: any[]): { name?: string; artistName
 
 export class TidalConnector implements ServiceConnector {
   readonly service = 'tidal' as const;
+  private lastRequestAt = 0;
 
   constructor(
     private readonly getToken: () => Promise<string>,
@@ -47,25 +53,36 @@ export class TidalConnector implements ServiceConnector {
     return this.isAuthorizedFn();
   }
 
+  /** Spaces out consecutive requests -- TIDAL doesn't publish a numeric rate
+   * limit, so this is a conservative default rather than a tuned one. */
+  private async throttle(): Promise<void> {
+    const wait = this.lastRequestAt + MIN_REQUEST_INTERVAL_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    this.lastRequestAt = Date.now();
+  }
+
   private async request(
     method: string,
     path: string,
     body?: unknown,
     extraHeaders?: Record<string, string>,
   ): Promise<any> {
+    await this.throttle();
     const token = await this.getToken();
     const sep = path.includes('?') ? '&' : '?';
     const url = `${API}${path}${sep}countryCode=${encodeURIComponent(this.countryCode)}`;
-    const res = await this.fetchImpl(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: JSON_API,
-        'Content-Type': JSON_API,
-        ...extraHeaders,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const res = await fetchWithRetry(() =>
+      this.fetchImpl(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: JSON_API,
+          'Content-Type': JSON_API,
+          ...extraHeaders,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
     if (!res.ok) {
       throw new ConnectorError(`TIDAL HTTP ${res.status} for ${method} ${path}: ${await res.text()}`, res.status);
     }
@@ -74,15 +91,33 @@ export class TidalConnector implements ServiceConnector {
     return text ? JSON.parse(text) : undefined;
   }
 
+  /**
+   * Collects `included` resources of `relType` for a search query across up
+   * to `SEARCH_MAX_PAGES` pages of the paginated relationship endpoint
+   * (`/searchResults/{id}/relationships/{relType}`), rather than the base
+   * `/searchResults/{id}?include=...` endpoint -- which returns a small,
+   * undocumented, unpaginated batch and can miss an exact match that's just
+   * not in that first handful of results.
+   */
+  private async searchRelated(term: string, relType: 'tracks' | 'albums' | 'artists'): Promise<any[]> {
+    const out: any[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
+      const path = `/searchResults/${encodeURIComponent(term)}/relationships/${relType}?include=${relType}${cursor ? `&page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
+      const data = await this.request('GET', path);
+      out.push(...((data?.included ?? []) as any[]));
+      const next = data?.links?.meta?.nextCursor;
+      if (!next) break;
+      cursor = next;
+    }
+    return out;
+  }
+
   async searchTrack(query: TrackQuery): Promise<ServiceTrack[]> {
     const term = query.isrc ? query.isrc : `${query.artistName} ${query.trackName}`;
-    const data = await this.request(
-      'GET',
-      `/searchResults/${encodeURIComponent(term)}?include=tracks`,
-    );
+    const included = await this.searchRelated(term, 'tracks');
     // JSON:API: track resources arrive in `included`; artist names, when
     // present, are separate included resources referenced by relationship.
-    const included: any[] = data?.included ?? [];
     const artistsById = new Map<string, string>();
     for (const r of included) if (r?.type === 'artists') artistsById.set(r.id, r.attributes?.name ?? '');
     return included
@@ -101,8 +136,7 @@ export class TidalConnector implements ServiceConnector {
 
   async searchAlbum(query: AlbumQuery): Promise<ServiceAlbum[]> {
     const term = `${query.artistName} ${query.albumName}`;
-    const data = await this.request('GET', `/searchResults/${encodeURIComponent(term)}?include=albums`);
-    const included: any[] = data?.included ?? [];
+    const included = await this.searchRelated(term, 'albums');
     const artistsById = new Map<string, string>();
     for (const r of included) if (r?.type === 'artists') artistsById.set(r.id, r.attributes?.name ?? '');
     return included
@@ -118,8 +152,7 @@ export class TidalConnector implements ServiceConnector {
   }
 
   async searchArtist(query: ArtistQuery): Promise<ServiceArtist[]> {
-    const data = await this.request('GET', `/searchResults/${encodeURIComponent(query.artistName)}?include=artists`);
-    const included: any[] = data?.included ?? [];
+    const included = await this.searchRelated(query.artistName, 'artists');
     return included
       .filter((r) => r?.type === 'artists')
       .map((r) => ({ serviceId: String(r.id), name: r.attributes?.name ?? '' }) satisfies ServiceArtist);
@@ -135,6 +168,20 @@ export class TidalConnector implements ServiceConnector {
   async setPlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
     if (serviceTrackIds.length === 0) return;
     await this.request('POST', `/playlists/${playlistId}/relationships/items`, {
+      data: serviceTrackIds.map((id) => ({ type: 'tracks', id })),
+    });
+  }
+
+  /** Adds tracks without touching existing contents -- TIDAL's add endpoint already
+   * only appends, so this is the same call as setPlaylistTracks. */
+  async appendPlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
+    await this.setPlaylistTracks(playlistId, serviceTrackIds);
+  }
+
+  /** Removes specific tracks from a playlist (unlike clearPlaylist, which empties it entirely). */
+  async removePlaylistTracks(playlistId: string, serviceTrackIds: string[]): Promise<void> {
+    if (serviceTrackIds.length === 0) return;
+    await this.request('DELETE', `/playlists/${playlistId}/relationships/items`, {
       data: serviceTrackIds.map((id) => ({ type: 'tracks', id })),
     });
   }
