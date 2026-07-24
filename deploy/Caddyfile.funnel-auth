@@ -1,0 +1,14 @@
+# Local basic-auth gate sitting in front of the app, used only by the
+# Tailscale Funnel (public internet) path. Listens on loopback only —
+# Tailscale is what actually exposes it publicly, this just adds the
+# password check.
+#
+# Generate the hash with: caddy hash-password
+# Replace <username> and <bcrypt-hash> below with your own.
+
+http://127.0.0.1:8766 {
+	basic_auth {
+		<username> <bcrypt-hash>
+	}
+	reverse_proxy 127.0.0.1:8765
+}

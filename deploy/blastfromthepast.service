@@ -1,0 +1,25 @@
+[Unit]
+Description=BlastFromThePast (Last.fm/Spotify/TIDAL playlist tool)
+After=network.target
+
+[Service]
+Type=simple
+# Adjust these to match where you cloned the repo and which user should own it.
+User=bftp
+Group=bftp
+WorkingDirectory=/opt/blastfromthepast
+EnvironmentFile=/opt/blastfromthepast/deploy/bftp.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+
+# Basic hardening. The app only needs to listen on loopback and read/write
+# its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/blastfromthepast/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

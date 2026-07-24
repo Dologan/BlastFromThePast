@@ -112,6 +112,13 @@ manually (remembered as a verified link). Start from a **preset** (Forgotten
 favourites, On this day, Deep cuts of a genre, Long-lost loves, Album
 rediscovery) and tweak from there.
 
+## Deploying on a VPS behind Tailscale
+
+See [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for a full walkthrough of running
+this as a systemd service with two access paths: a gate-free copy reachable
+only from your Tailnet, and a password-gated copy reachable from the public
+internet (via Tailscale Funnel, or your own domain + Caddy).
+
 ## Layout
 
 ```

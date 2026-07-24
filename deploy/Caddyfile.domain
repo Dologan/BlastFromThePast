@@ -1,0 +1,14 @@
+# Alternative to Tailscale Funnel: expose the app on your own domain with
+# Caddy handling Let's Encrypt automatically. Requires a DNS A (and/or AAAA)
+# record for the domain pointing at this VPS's public IP, and ports 80/443
+# reachable from the internet (80 is needed for the ACME HTTP challenge).
+#
+# Generate the password hash with: caddy hash-password
+# Replace bftp.example.com, <username> and <bcrypt-hash> below.
+
+bftp.example.com {
+	basic_auth {
+		<username> <bcrypt-hash>
+	}
+	reverse_proxy 127.0.0.1:8765
+}
