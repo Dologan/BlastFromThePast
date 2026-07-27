@@ -169,6 +169,18 @@ including a trailing newline in the encoded value, which would make the
 password never match at login time — hence going through the `$HASH`
 variable first, since command substitution strips it.
 
+**Also watch your braces when editing:** `reverse_proxy` must be a
+*sibling* of `basic_auth`, not nested inside its `{ }` — if it ends up
+inside, Caddy parses `reverse_proxy`/`127.0.0.1:8765` as a bogus
+username/password pair, which fails with the *exact same*
+`illegal base64 data at input byte 3` message (byte 3 there is the `.`
+after `127`), so that error alone doesn't tell you which mistake you've
+made. After editing, run `caddy fmt --overwrite /etc/caddy/Caddyfile`
+(reindents in place) and re-open the file — a misplaced brace becomes
+obvious once it's reformatted, since `reverse_proxy` will visually still
+be indented as a child of `basic_auth` instead of back out at the site
+block's level.
+
 Now serve that auth-gated port on a second Tailnet HTTPS port and funnel it
 to the public internet. Funnel only supports ports 443, 8443, and 10000, and
 whichever of those you use here must be different from whatever port you
