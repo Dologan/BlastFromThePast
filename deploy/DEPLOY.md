@@ -138,30 +138,36 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update && apt install -y caddy
 ```
 
-Generate a password hash:
+Generate a password hash, then base64-encode it (the Caddyfile
+`basic_auth` field wants the base64 form, but `caddy hash-password` only
+ever prints the raw `$2a$14$...` bcrypt string — a known inconsistency
+between the two, not something you're doing wrong):
 
 ```sh
-caddy hash-password
+HASH=$(caddy hash-password)
+printf '%s' "$HASH" | base64 -w0; echo
 ```
 
 Copy `deploy/Caddyfile.funnel-auth` to `/etc/caddy/Caddyfile`, filling in
-your username and the hash from above, then reload:
+your username and the base64 output above, then reload:
 
 ```sh
 cp deploy/Caddyfile.funnel-auth /etc/caddy/Caddyfile
-# edit /etc/caddy/Caddyfile: set <username> and <hashed-password>
+# edit /etc/caddy/Caddyfile: set <username> and <hashed-password> (the base64 string)
 caddy validate --config /etc/caddy/Caddyfile   # catches config mistakes before reloading
 systemctl reload caddy
 curl -u '<username>:<password>' http://127.0.0.1:8766/api/health   # {"ok":true}
 ```
 
-**Careful:** `caddy hash-password`'s output is a base64 blob
-(letters/digits/`+`/`/`/`=`), not a raw `$2a$14$...`-style bcrypt string —
-paste the *entire* printed line verbatim as `<hashed-password>`. Pasting a
-raw `$2a$...` hash instead (e.g. from `htpasswd` or a truncated copy) fails
-`caddy validate`/`reload` with `base64-decoding password: illegal base64
-data at input byte 3` — byte 3 is the second `$` in `$2a$14$...`, which
-isn't a valid base64 character.
+**Why:** the field must be a base64-encoded blob (that's what Caddy's own
+docs example shows), not the raw `$2a$14$...` string `caddy hash-password`
+prints. Pasting the raw bcrypt string directly fails `caddy validate`/
+`reload` with `base64-decoding password: illegal base64 data at input byte
+3` — byte 3 is the second `$` in `$2a$14$...`, which isn't valid base64.
+Piping straight through (`caddy hash-password | base64 -w0`) also risks
+including a trailing newline in the encoded value, which would make the
+password never match at login time — hence going through the `$HASH`
+variable first, since command substitution strips it.
 
 Now serve that auth-gated port on a second Tailnet HTTPS port and funnel it
 to the public internet. Funnel only supports ports 443, 8443, and 10000, and

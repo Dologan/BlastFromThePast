@@ -4,11 +4,14 @@
 # reachable from the internet (80 is needed for the ACME HTTP challenge).
 #
 # Generate the password hash with: caddy hash-password
-# Its output is a base64 blob (letters/digits/+//=), NOT the raw
-# "$2a$14$..." bcrypt string -- copy the whole printed line verbatim into
-# <hashed-password> below. Pasting a raw "$2a$..." string here instead
-# fails with "base64-decoding password: illegal base64 data ..." because
-# Caddy tries to base64-decode it and hits the "$" characters.
+# It prints a raw "$2a$14$..." bcrypt string, but this field needs that
+# string BASE64-ENCODED (a known inconsistency between the tool and the
+# Caddyfile format) -- e.g.:
+#   HASH=$(caddy hash-password); printf '%s' "$HASH" | base64 -w0; echo
+# Paste that base64 output (not the raw "$2a$..." string) as
+# <hashed-password> below. Pasting the raw bcrypt string instead fails with
+# "base64-decoding password: illegal base64 data ..." because Caddy tries
+# to base64-decode it and hits the "$" characters.
 # Replace bftp.example.com, <username> and <hashed-password> below.
 
 bftp.example.com {
