@@ -254,6 +254,81 @@ npm run build
 systemctl restart blastfromthepast
 ```
 
+## 8. Wiring up the MCP server (OpenClaw / mcporter)
+
+The MCP server (`apps/server/src/mcp/server.ts`, see `docs/assistant.md`)
+is a separate, on-demand process — nothing in the systemd unit above
+starts it, and it doesn't need to run continuously. It's a thin stdio
+proxy over the HTTP API, so it just needs `BFTP_API_URL` pointed at the
+running app; the systemd-managed app itself is the only thing that has to
+stay up.
+
+If OpenClaw (or any other MCP client via [mcporter](https://github.com/openclaw/mcporter))
+runs on this **same box**, this is the simplest case: no `BFTP_API_TOKEN`
+needed, since the bearer-token guard exempts loopback callers entirely.
+Register it in mcporter's config (`~/.mcporter/mcporter.json`, or wherever
+your OpenClaw setup points mcporter at — check its docs for which path it
+loads) by invoking `tsx` directly with absolute paths, rather than through
+`npm run mcp --workspace apps/server`:
+
+```json
+{
+  "mcpServers": {
+    "blastfromthepast": {
+      "command": "/opt/blastfromthepast/node_modules/.bin/tsx",
+      "args": ["/opt/blastfromthepast/apps/server/src/mcp/server.ts"],
+      "env": {
+        "BFTP_API_URL": "http://127.0.0.1:8765"
+      }
+    }
+  }
+}
+```
+
+**Why not `npm run mcp --workspace apps/server` with a `cwd`:** that's
+what `docs/assistant.md`'s generic example shows, and it works fine when
+you run it by hand from the repo root — but it depends on mcporter
+actually launching `npm` with the `cwd` you configured. If that doesn't
+happen (e.g. a config typo, or the client not honoring `cwd` the way you
+expect), `npm` runs somewhere without this repo's root `package.json` and
+fails immediately with:
+
+```
+npm error No workspaces found:
+npm error   --workspace=apps/server
+```
+
+Invoking the locally-installed `tsx` binary by absolute path sidesteps
+this whole failure mode — there's no `cwd` to get wrong, since every path
+involved is already absolute. Confirm the binary exists at that path
+first (npm workspaces normally hoists it to the repo root):
+
+```sh
+ls -la /opt/blastfromthepast/node_modules/.bin/tsx
+```
+
+If it's not there, check `apps/server/node_modules/.bin/tsx` instead and
+adjust the `command` path accordingly.
+
+Test the whole chain (mcporter → `tsx` → stdio → HTTP call to
+`127.0.0.1:8765`) before wiring it into a chat:
+
+```sh
+npx mcporter list
+npx mcporter call blastfromthepast get_context
+```
+
+`get_context` is the cheapest read-only tool exposed — a clean JSON
+response back confirms everything end-to-end.
+
+If instead your MCP client runs on a **different machine** than this VPS
+(e.g. your own laptop, or another server), point `BFTP_API_URL` at the
+Tailnet or Funnel URL from steps 3/4 instead of `127.0.0.1`, and set
+`BFTP_API_TOKEN` (matching the same value as `BFTP_PUBLIC_URL`'s host —
+i.e. as an env var on both the server, via `deploy/bftp.env`, and the
+client's mcporter config) — see the "Cloud VPS → home" topology in
+`docs/assistant.md` for the full reasoning.
+
 ## Notes
 
 - The app has its own optional `BFTP_API_TOKEN` bearer-token check
