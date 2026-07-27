@@ -9,10 +9,12 @@ from a public one (once traffic reaches the app it's all loopback either
 way).
 
 ```
-Tailnet device  ──▶ tailscale serve :443  ───────────────▶ 127.0.0.1:8765 (app)
+Tailnet device  ──▶ tailscale serve :443*  ──────────────▶ 127.0.0.1:8765 (app)
                                                                   ▲
 Public internet ──▶ tailscale funnel :8443 ─▶ Caddy :8766 (basic auth) ─┘
 ```
+*or any other free port — see the callout in step 3 if this node already
+serves another app on 443.
 
 Two options are covered for the public leg:
 
@@ -61,7 +63,21 @@ curl -s http://127.0.0.1:8765/api/health   # {"ok":true}
 
 The unit runs the app as an unprivileged `bftp` user, confined to its own
 directory (`ProtectSystem=strict`, `ProtectHome=true`), listening only on
-`127.0.0.1` — it is never reachable except through the proxies below.
+`127.0.0.1` — it is never reachable except through the proxies below. Its
+database lives under `/var/lib/blastfromthepast`, which systemd's
+`StateDirectory=` creates and makes writable for you automatically.
+
+**If `systemctl status` shows `code=exited, status=226/NAMESPACE`:** that's
+systemd failing to set up the service's mount namespace, not the app
+itself crashing — check the real reason with
+`journalctl -u blastfromthepast -n 50 --no-pager`. The most common cause is
+a directory referenced by the unit's sandboxing (`ReadWritePaths=`, etc.)
+not existing yet; the unit here avoids that by using `StateDirectory=`
+instead, which systemd creates itself, so this shouldn't come up as long as
+you're using the unit file as-is. If you edited it, double check that
+every path involved already exists (or use `StateDirectory=`/`CacheDirectory=`
+rather than pointing `ReadWritePaths=` at something that isn't created
+until the app first runs).
 
 ## 3. Tailnet-only gate-free access
 
@@ -77,6 +93,33 @@ tailscale serve status
 
 Open `https://<device>.<tailnet-name>.ts.net` from any device in your
 tailnet. No login prompt, no exposure outside the tailnet.
+
+**If this node already has another app on `tailscale serve --https=443`**
+(e.g. a separate service on the same box), port 443 is taken — `serve`
+config is one-hostname-one-thing-per-port, so a second `--https=443` here
+would just replace the other app's config, not add to it. The 443/8443/10000
+restriction only applies to **Funnel**; plain `tailscale serve` accepts any
+port number, so give this app its own port instead, e.g.:
+
+```sh
+tailscale serve --bg --https=10000 http://127.0.0.1:8765
+```
+
+→ `https://<device>.<tailnet-name>.ts.net:10000`, still gate-free, still
+only reachable from the tailnet — just on a different port than the other
+app. Run `tailscale serve status` first to see what's already configured
+before picking a free port.
+
+If you'd rather both apps *look* like they're on port 443 with their own
+hostnames instead of sharing one hostname on different ports, that's what
+[Tailscale Services](https://tailscale.com/docs/features/tailscale-services)
+(a newer, separate feature from plain `serve`/`funnel`) are for — each
+service gets its own virtual hostname/IP via `tailscale serve
+--service=svc:<name> --https=443 ...`, so two services can each sit on
+their "own" 443. It needs an ACL policy change (a `grants`/`services` entry
+authorizing the service, plus admin-console approval unless you set up an
+`autoApprovers` rule for it) and is a heavier lift than just picking a free
+port — worth it only if you specifically want the port-443-everywhere look.
 
 ## 4. Public access, gated — Option A: Tailscale Funnel
 
@@ -112,8 +155,11 @@ curl -u '<username>:<password>' http://127.0.0.1:8766/api/health   # {"ok":true}
 ```
 
 Now serve that auth-gated port on a second Tailnet HTTPS port and funnel it
-to the public internet (Funnel only supports ports 443, 8443, and 10000 —
-443 is already taken by the gate-free path, so use 8443):
+to the public internet. Funnel only supports ports 443, 8443, and 10000, and
+whichever of those you use here must be different from whatever port you
+picked for the gate-free path in step 3 (check with `tailscale serve status`
+/ `tailscale funnel status` first — e.g. if another app already owns 443
+and you put the gate-free path on 10000, use 8443 here):
 
 ```sh
 tailscale serve --bg --https=8443 http://127.0.0.1:8766

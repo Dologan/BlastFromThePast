@@ -15,10 +15,17 @@ RestartSec=5
 
 # Basic hardening. The app only needs to listen on loopback and read/write
 # its own data directory.
+#
+# StateDirectory creates/owns /var/lib/blastfromthepast for us and is
+# automatically writable under ProtectSystem=strict -- unlike a manual
+# ReadWritePaths=, which must point at a directory that already exists
+# (otherwise systemd fails namespace setup with exit code 226/NAMESPACE,
+# which is what happens if you point it at .../data before that directory
+# has ever been created). Point BFTP_DB_PATH at this directory in bftp.env.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/opt/blastfromthepast/data
+StateDirectory=blastfromthepast
 ProtectHome=true
 
 [Install]
