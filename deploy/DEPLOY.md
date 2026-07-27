@@ -138,7 +138,7 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update && apt install -y caddy
 ```
 
-Generate a bcrypt hash for your chosen password:
+Generate a password hash:
 
 ```sh
 caddy hash-password
@@ -149,10 +149,19 @@ your username and the hash from above, then reload:
 
 ```sh
 cp deploy/Caddyfile.funnel-auth /etc/caddy/Caddyfile
-# edit /etc/caddy/Caddyfile: set <username> and <bcrypt-hash>
+# edit /etc/caddy/Caddyfile: set <username> and <hashed-password>
+caddy validate --config /etc/caddy/Caddyfile   # catches config mistakes before reloading
 systemctl reload caddy
 curl -u '<username>:<password>' http://127.0.0.1:8766/api/health   # {"ok":true}
 ```
+
+**Careful:** `caddy hash-password`'s output is a base64 blob
+(letters/digits/`+`/`/`/`=`), not a raw `$2a$14$...`-style bcrypt string —
+paste the *entire* printed line verbatim as `<hashed-password>`. Pasting a
+raw `$2a$...` hash instead (e.g. from `htpasswd` or a truncated copy) fails
+`caddy validate`/`reload` with `base64-decoding password: illegal base64
+data at input byte 3` — byte 3 is the second `$` in `$2a$14$...`, which
+isn't a valid base64 character.
 
 Now serve that auth-gated port on a second Tailnet HTTPS port and funnel it
 to the public internet. Funnel only supports ports 443, 8443, and 10000, and

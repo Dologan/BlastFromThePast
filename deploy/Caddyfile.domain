@@ -4,11 +4,16 @@
 # reachable from the internet (80 is needed for the ACME HTTP challenge).
 #
 # Generate the password hash with: caddy hash-password
-# Replace bftp.example.com, <username> and <bcrypt-hash> below.
+# Its output is a base64 blob (letters/digits/+//=), NOT the raw
+# "$2a$14$..." bcrypt string -- copy the whole printed line verbatim into
+# <hashed-password> below. Pasting a raw "$2a$..." string here instead
+# fails with "base64-decoding password: illegal base64 data ..." because
+# Caddy tries to base64-decode it and hits the "$" characters.
+# Replace bftp.example.com, <username> and <hashed-password> below.
 
 bftp.example.com {
 	basic_auth {
-		<username> <bcrypt-hash>
+		<username> <hashed-password>
 	}
 	reverse_proxy 127.0.0.1:8765
 }

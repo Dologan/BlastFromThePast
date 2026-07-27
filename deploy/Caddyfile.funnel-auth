@@ -4,11 +4,16 @@
 # password check.
 #
 # Generate the hash with: caddy hash-password
-# Replace <username> and <bcrypt-hash> below with your own.
+# Its output is a base64 blob (letters/digits/+//=), NOT the raw
+# "$2a$14$..." bcrypt string -- copy the whole printed line verbatim into
+# <hashed-password> below. Pasting a raw "$2a$..." string here instead
+# fails with "base64-decoding password: illegal base64 data ..." because
+# Caddy tries to base64-decode it and hits the "$" characters.
+# Replace <username> and <hashed-password> below with your own.
 
 http://127.0.0.1:8766 {
 	basic_auth {
-		<username> <bcrypt-hash>
+		<username> <hashed-password>
 	}
 	reverse_proxy 127.0.0.1:8765
 }
