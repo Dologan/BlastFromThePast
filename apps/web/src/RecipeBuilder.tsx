@@ -35,6 +35,7 @@ const CLAUSE_LABELS: Record<ClauseType, string> = {
   firstListen: 'First listened between',
   lastListen: 'Last listened between',
   peakMonth: 'Peak listening between',
+  releaseDate: 'Released between',
   playcount: 'Play count',
   loved: 'Loved / liked',
   excludeRecentlyPlaylisted: 'Exclude recently playlisted',
@@ -50,6 +51,7 @@ const CLAUSE_ORDER: ClauseType[] = [
   'firstListen',
   'lastListen',
   'peakMonth',
+  'releaseDate',
   'playcount',
   'loved',
   'excludeRecentlyPlaylisted',
@@ -70,6 +72,7 @@ function defaultClause(type: ClauseType): Clause {
     case 'firstListen':
     case 'lastListen':
     case 'peakMonth':
+    case 'releaseDate':
       return { type };
     case 'playcount':
       return { type, min: 5 };
@@ -91,6 +94,7 @@ function isMeaningful(c: Clause): boolean {
     case 'firstListen':
     case 'lastListen':
     case 'peakMonth':
+    case 'releaseDate':
       return Boolean(c.after || c.before);
     case 'playcount':
       return c.min !== undefined || c.max !== undefined;
@@ -194,6 +198,7 @@ function ClauseEditor({
       );
     case 'firstListen':
     case 'lastListen':
+    case 'releaseDate':
       return (
         <DateRangeInput
           after={clause.after}

@@ -113,6 +113,12 @@ export type EnrichProgress =
     }
   | { kind: 'enrich'; phase: 'derive'; processed: number; total: number };
 
+export interface AlbumEnrichProgress {
+  kind: 'enrich-albums';
+  processed: number;
+  total: number;
+}
+
 export interface ServiceLikedProgress {
   kind: 'service-liked';
   source: 'spotify' | 'tidal';
@@ -153,6 +159,7 @@ export interface UnlikeProgress {
 export type JobProgress =
   | SyncProgress
   | EnrichProgress
+  | AlbumEnrichProgress
   | ServiceLikedProgress
   | PushProgress
   | PlaylistInventoryProgress
@@ -247,7 +254,8 @@ export interface LibrarySummary {
   firstScrobble: number | null;
   lastScrobble: number | null;
   enrichment: { enriched: number; pending: number; errored: number; withCountry: number };
-  cache: { mbSearches: number; mbArtists: number; lastfmTags: number };
+  albumEnrichment: { enriched: number; pending: number; errored: number; withDate: number };
+  cache: { mbSearches: number; mbArtists: number; lastfmTags: number; mbReleaseSearches: number; mbReleaseGroups: number };
   topGenres: NamedWeight[];
   topCountries: NamedWeight[];
 }
@@ -351,6 +359,13 @@ export const api = {
   startEnrichment: () => request<{ started: boolean }>('/api/enrich', { method: 'POST' }),
   startReprocess: () =>
     request<{ started: boolean }>('/api/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reprocess: true }),
+    }),
+  startAlbumEnrichment: () => request<{ started: boolean }>('/api/enrich/albums', { method: 'POST' }),
+  startAlbumReprocess: () =>
+    request<{ started: boolean }>('/api/enrich/albums', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reprocess: true }),

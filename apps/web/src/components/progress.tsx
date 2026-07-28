@@ -10,6 +10,9 @@ export function progressText(status: SyncStatus): string | null {
     }
     return `Applying to library — ${p.processed} of ${p.total} artists`;
   }
+  if ('kind' in p && p.kind === 'enrich-albums') {
+    return `Fetching release dates — ${p.processed} of ${p.total} albums`;
+  }
   if ('kind' in p && p.kind === 'service-liked') {
     return `Importing ${p.source} liked — ${p.linked} matched of ${p.seen} seen`;
   }
@@ -54,6 +57,8 @@ export function progressFraction(status: SyncStatus): number | null {
     case 'enrich':
       if (p.phase === 'derive') return p.total > 0 ? p.processed / p.total : null;
       return null;
+    case 'enrich-albums':
+      return p.total > 0 ? p.processed / p.total : null;
     default:
       return null;
   }

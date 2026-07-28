@@ -67,4 +67,35 @@ describe('EnrichmentCache', () => {
     cache.putMbArtist('mbid-1', { country: 'GB', genres: [], tags: [] });
     expect(cache.getMbArtist('mbid-1')?.country).toBe('GB');
   });
+
+  it('distinguishes not-cached (undefined) from a cached miss (null) for release-group search', () => {
+    handle = openDb(':memory:');
+    const cache = new EnrichmentCache(handle.sqlite);
+
+    expect(cache.hasReleaseSearch('Opeth', 'Ghost Reveries')).toBe(false);
+    expect(cache.getReleaseSearch('Opeth', 'Ghost Reveries')).toBeUndefined();
+
+    cache.putReleaseSearch('Nobody', 'Nothing', null); // confirmed: no candidate found
+    expect(cache.hasReleaseSearch('Nobody', 'Nothing')).toBe(true);
+    expect(cache.getReleaseSearch('Nobody', 'Nothing')).toBeNull();
+
+    cache.putReleaseSearch('Opeth', 'Ghost Reveries', { mbid: 'rg-1', score: 100 });
+    expect(cache.getReleaseSearch('Opeth', 'Ghost Reveries')).toEqual({ mbid: 'rg-1', score: 100 });
+    // Lookups are name-normalized (case/whitespace insensitive).
+    expect(cache.getReleaseSearch('  opeth  ', '  ghost reveries  ')).toEqual({ mbid: 'rg-1', score: 100 });
+    // A different album by the same artist is a distinct cache key.
+    expect(cache.getReleaseSearch('Opeth', 'Blackwater Park')).toBeUndefined();
+  });
+
+  it('distinguishes not-cached from a cached 404 for release-group lookups', () => {
+    handle = openDb(':memory:');
+    const cache = new EnrichmentCache(handle.sqlite);
+
+    expect(cache.getReleaseGroup('rg-x')).toBeUndefined();
+    cache.putReleaseGroup('rg-x', null);
+    expect(cache.getReleaseGroup('rg-x')).toBeNull();
+
+    cache.putReleaseGroup('rg-y', { releaseDate: '2005-08-24' });
+    expect(cache.getReleaseGroup('rg-y')).toEqual({ releaseDate: '2005-08-24' });
+  });
 });

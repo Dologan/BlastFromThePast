@@ -86,6 +86,7 @@ Filter clauses (all day counts: week=7, month=30, year=365):
 | `{"type":"firstListen","after":"YYYY-MM-DD","before":"YYYY-MM-DD"}` | Discovered in a date range ("music from my 2014 phase"). |
 | `{"type":"lastListen","after":...,"before":...}` | Last played in a date range. |
 | `{"type":"peakMonth","after":...,"before":...}` | Heaviest-listening month fell in the range. |
+| `{"type":"releaseDate","after":...,"before":...}` | Album release date in range ("albums released in the 90s"). Compared by year only — MusicBrainz dates are often year-only precision. |
 | `{"type":"anniversary","field":"firstListen","windowDays":3}` | First/last listened around today's date in past years. |
 | `{"type":"gapDays","minDays":N,"maxDays":M,"infinite":true}` | Gap between plays; `infinite` = never returned from its longest pause. |
 | `{"type":"excludeRecentlyPlaylisted","days":N}` | Skip tracks already pushed to a playlist recently (good default: 30). |

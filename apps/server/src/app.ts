@@ -7,6 +7,7 @@ import { LastfmSync } from './sync/lastfmSync.js';
 import { JobManager } from './sync/jobManager.js';
 import { MusicBrainzClient } from './enrich/musicbrainz.js';
 import { Enrichment } from './enrich/enrichment.js';
+import { AlbumEnrichment } from './enrich/albumEnrichment.js';
 import { RecipeService } from './recipes/recipeService.js';
 import { TokenCrypto } from './auth/crypto.js';
 import { TokenStore } from './auth/tokenStore.js';
@@ -189,6 +190,28 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return reply.code(202).send({ started: true });
   });
 
+  app.post('/api/enrich/albums', async (req, reply) => {
+    const body = (req.body as { reprocess?: boolean } | undefined) ?? {};
+
+    // Reprocessing re-derives albums.release_date purely from the cached
+    // MusicBrainz responses -- no network calls needed.
+    if (body.reprocess) {
+      const albumEnrichment = new AlbumEnrichment(handle, null, jobs.reportProgress);
+      const started = jobs.start('enrich-albums-reprocess', async () => {
+        albumEnrichment.reprocessAll();
+      });
+      if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+      return reply.code(202).send({ started: true });
+    }
+
+    const albumEnrichment = new AlbumEnrichment(handle, createMb(), jobs.reportProgress);
+    const started = jobs.start('enrich-albums', async () => {
+      await albumEnrichment.run();
+    });
+    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    return reply.code(202).send({ started: true });
+  });
+
   app.get('/api/sync/status', async () => {
     const sources = handle.sqlite
       .prepare('SELECT source, status, error, last_synced_at AS lastSyncedAt FROM sync_state')
@@ -214,12 +237,20 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         (SELECT COUNT(*) FROM artists WHERE enrich_status = 'error') AS errored,
         (SELECT COUNT(*) FROM artists WHERE country IS NOT NULL) AS withCountry`);
 
+    const albumEnrichment = one(`SELECT
+        (SELECT COUNT(*) FROM albums WHERE release_date_status = 'done') AS enriched,
+        (SELECT COUNT(*) FROM albums WHERE release_date_status = 'pending') AS pending,
+        (SELECT COUNT(*) FROM albums WHERE release_date_status = 'error') AS errored,
+        (SELECT COUNT(*) FROM albums WHERE release_date IS NOT NULL) AS withDate`);
+
     // Cache row counts, so it's visible that re-deriving (reprocessAll) after
     // a schema change won't cost any network time.
     const cache = one(`SELECT
         (SELECT COUNT(*) FROM mb_search_cache) AS mbSearches,
         (SELECT COUNT(*) FROM mb_artist_cache) AS mbArtists,
-        (SELECT COUNT(*) FROM lastfm_tags_cache) AS lastfmTags`);
+        (SELECT COUNT(*) FROM lastfm_tags_cache) AS lastfmTags,
+        (SELECT COUNT(*) FROM mb_release_search_cache) AS mbReleaseSearches,
+        (SELECT COUNT(*) FROM mb_release_group_cache) AS mbReleaseGroups`);
 
     // Genres/countries weighted by how much the user actually listens (artist
     // playcount), so the summary reflects taste rather than raw catalogue size.
@@ -244,7 +275,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       )
       .all();
 
-    return { ...counts, enrichment, cache, topGenres, topCountries };
+    return { ...counts, enrichment, albumEnrichment, cache, topGenres, topCountries };
   });
 
   const TOP_ARTISTS_RANGE_DAYS: Record<string, number | null> = { all: null, week: 7, month: 30, year: 365 };

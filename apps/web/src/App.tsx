@@ -181,10 +181,12 @@ function SyncPanel({
   onSync,
   onEnrich,
   onReprocess,
+  onEnrichAlbums,
   onImportLiked,
   onImportTidalLiked,
   onSyncPlaylists,
   pendingEnrich,
+  pendingAlbumEnrich,
   hasCache,
   spotifyConnected,
   tidalConnected,
@@ -193,10 +195,12 @@ function SyncPanel({
   onSync: () => void;
   onEnrich: () => void;
   onReprocess: () => void;
+  onEnrichAlbums: () => void;
   onImportLiked: () => void;
   onImportTidalLiked: () => void;
   onSyncPlaylists: () => void;
   pendingEnrich: number;
+  pendingAlbumEnrich: number;
   hasCache: boolean;
   spotifyConnected: boolean;
   tidalConnected: boolean;
@@ -219,6 +223,11 @@ function SyncPanel({
             {running && status?.job === 'enrich-reprocess' ? 'Reprocessing…' : 'Reprocess from cache'}
           </button>
         )}
+        <button onClick={onEnrichAlbums} disabled={running} title="Fetch album release dates from MusicBrainz, for the Recipe Builder's release date filter">
+          {running && status?.job === 'enrich-albums'
+            ? 'Fetching release dates…'
+            : `Enrich albums${pendingAlbumEnrich > 0 ? ` (${pendingAlbumEnrich})` : ''}`}
+        </button>
         {spotifyConnected && (
           <button onClick={onImportLiked} disabled={running} title="Flag library tracks you've liked on Spotify">
             {running && status?.job === 'spotify-liked' ? 'Importing…' : 'Import Spotify liked'}
@@ -684,10 +693,12 @@ function Dashboard() {
           onSync={() => runJob(api.startLastfmSync)}
           onEnrich={() => runJob(api.startEnrichment)}
           onReprocess={() => runJob(api.startReprocess)}
+          onEnrichAlbums={() => runJob(api.startAlbumEnrichment)}
           onImportLiked={() => runJob(api.importSpotifyLiked)}
           onImportTidalLiked={() => runJob(api.importTidalLiked)}
           onSyncPlaylists={() => runJob(() => api.syncPlaylists())}
           pendingEnrich={summary?.enrichment.pending ?? 0}
+          pendingAlbumEnrich={summary?.albumEnrichment.pending ?? 0}
           hasCache={(summary?.cache.mbArtists ?? 0) + (summary?.cache.mbSearches ?? 0) > 0}
           spotifyConnected={auth?.spotify.connected ?? false}
           tidalConnected={auth?.tidal.connected ?? false}

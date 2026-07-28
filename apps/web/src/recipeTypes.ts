@@ -11,6 +11,7 @@ export type Clause =
   | ({ type: 'firstListen' } & DateBound)
   | ({ type: 'lastListen' } & DateBound)
   | ({ type: 'peakMonth' } & DateBound)
+  | ({ type: 'releaseDate' } & DateBound)
   | { type: 'notPlayedInDays'; days: number }
   | { type: 'playedInDays'; days: number }
   | { type: 'playcount'; min?: number; max?: number }

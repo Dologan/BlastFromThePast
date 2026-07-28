@@ -16,6 +16,16 @@ export interface MbSearchHit {
   country: string | null;
 }
 
+export interface MbReleaseSearchHit {
+  mbid: string;
+  score: number;
+}
+
+export interface MbReleaseGroup {
+  /** Raw MusicBrainz release-group date, partial precision: 'YYYY' | 'YYYY-MM' | 'YYYY-MM-DD'. */
+  firstReleaseDate: string | null;
+}
+
 export class MusicBrainzError extends Error {
   constructor(
     message: string,
@@ -131,5 +141,21 @@ export class MusicBrainzClient {
     const hit = body?.artists?.[0];
     if (!hit?.id) return null;
     return { mbid: String(hit.id), score: Number(hit.score ?? 0), country: resolveCountry(hit) };
+  }
+
+  /** Best-scoring release-group candidate for an artist+album name, or null. */
+  async searchReleaseGroup(artistName: string, albumName: string): Promise<MbReleaseSearchHit | null> {
+    const query = `releasegroup:"${albumName.replace(/"/g, '\\"')}" AND artist:"${artistName.replace(/"/g, '\\"')}"`;
+    const body = await this.get(`/release-group?query=${encodeURIComponent(query)}&limit=3&fmt=json`);
+    const hit = body?.['release-groups']?.[0];
+    if (!hit?.id) return null;
+    return { mbid: String(hit.id), score: Number(hit.score ?? 0) };
+  }
+
+  /** Release-group record (currently just its first-release-date), or null on 404. */
+  async lookupReleaseGroup(mbid: string): Promise<MbReleaseGroup | null> {
+    const body = await this.get(`/release-group/${encodeURIComponent(mbid)}?fmt=json`);
+    if (!body?.id) return null;
+    return { firstReleaseDate: body['first-release-date'] || null };
   }
 }

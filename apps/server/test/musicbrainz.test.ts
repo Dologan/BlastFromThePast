@@ -73,4 +73,46 @@ describe('MusicBrainzClient', () => {
       country: 'US',
     });
   });
+
+  it('searchReleaseGroup returns the top release-group hit with its score', async () => {
+    const url =
+      'https://musicbrainz.org/ws/2/release-group?query=' +
+      encodeURIComponent('releasegroup:"Ghost Reveries" AND artist:"Opeth"') +
+      '&limit=3&fmt=json';
+    const { fetchImpl } = fakeFetch({
+      [url]: { 'release-groups': [{ id: 'rg-1', score: 100, title: 'Ghost Reveries' }] },
+    });
+    const mb = new MusicBrainzClient('test/1.0', { ...opts, fetchImpl });
+    expect(await mb.searchReleaseGroup('Opeth', 'Ghost Reveries')).toEqual({ mbid: 'rg-1', score: 100 });
+  });
+
+  it('searchReleaseGroup returns null when no candidate is found', async () => {
+    const { fetchImpl } = fakeFetch({});
+    const mb = new MusicBrainzClient('test/1.0', { ...opts, fetchImpl });
+    expect(await mb.searchReleaseGroup('Nobody', 'Nothing')).toBeNull();
+  });
+
+  it('lookupReleaseGroup returns the first-release-date', async () => {
+    const url = 'https://musicbrainz.org/ws/2/release-group/rg-1?fmt=json';
+    const { fetchImpl } = fakeFetch({
+      [url]: { id: 'rg-1', title: 'Ghost Reveries', 'first-release-date': '2005-08-24' },
+    });
+    const mb = new MusicBrainzClient('test/1.0', { ...opts, fetchImpl });
+    expect(await mb.lookupReleaseGroup('rg-1')).toEqual({ firstReleaseDate: '2005-08-24' });
+  });
+
+  it('lookupReleaseGroup handles a partial (year-only) release date', async () => {
+    const url = 'https://musicbrainz.org/ws/2/release-group/rg-2?fmt=json';
+    const { fetchImpl } = fakeFetch({
+      [url]: { id: 'rg-2', title: 'Some Album', 'first-release-date': '1998' },
+    });
+    const mb = new MusicBrainzClient('test/1.0', { ...opts, fetchImpl });
+    expect(await mb.lookupReleaseGroup('rg-2')).toEqual({ firstReleaseDate: '1998' });
+  });
+
+  it('lookupReleaseGroup returns null for an unknown release-group (404)', async () => {
+    const { fetchImpl } = fakeFetch({});
+    const mb = new MusicBrainzClient('test/1.0', { ...opts, fetchImpl });
+    expect(await mb.lookupReleaseGroup('nope')).toBeNull();
+  });
 });

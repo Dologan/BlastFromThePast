@@ -28,12 +28,17 @@ All five build phases complete:
       services are fetched on concurrent lanes since they rate-limit
       independently
 - [x] Filter engine + saved "recipes": a JSON filter AST compiled to SQL
-      over the materialized stats — date ranges (first/last/peak listen),
-      "haven't played in N days", play-count ranges, genre (with subgenre
-      hierarchy), country, loved/liked, playlist-history exclusion; output
-      shaping (albums/tracks, neglect/recency/weighted-shuffle sorts, limit,
-      per-artist diversity cap); recipe builder UI with live preview and
-      Spotify/TIDAL deep links
+      over the materialized stats — date ranges (first/last/peak listen,
+      album release date), "haven't played in N days", play-count ranges,
+      genre (with subgenre hierarchy), country, loved/liked, playlist-history
+      exclusion; output shaping (albums/tracks, neglect/recency/weighted-shuffle
+      sorts, limit, per-artist diversity cap); recipe builder UI with live
+      preview and Spotify/TIDAL deep links
+- [x] Album release-date enrichment: a second, MusicBrainz-only enrichment
+      lane (same cache-then-derive pattern as artist enrichment) fills in
+      each album's release date from its release-group, powering the
+      `releaseDate` recipe filter above. Dates are often year-only precision
+      from MusicBrainz, so the filter compares by year.
 - [x] Spotify & TIDAL connectors: OAuth 2.0 + PKCE with encrypted token
       storage, Spotify liked-tracks import, service matching (ISRC → search,
       cached in `service_links`), and playlist push with matched/unmatched

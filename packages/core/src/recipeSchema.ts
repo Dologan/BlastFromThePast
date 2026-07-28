@@ -107,6 +107,14 @@ export const RECIPE_JSON_SCHEMA = {
           },
           {
             type: 'object',
+            description:
+              'Album release date within a range ("albums released in the 90s" => after 1990-01-01, before 1999-12-31). ' +
+              'Compared by YEAR only -- MusicBrainz release dates are often year-only precision.',
+            properties: { type: { const: 'releaseDate' }, after: isoDate('Earliest release year'), before: isoDate('Latest release year') },
+            required: ['type'],
+          },
+          {
+            type: 'object',
             description: 'First/last listen falls within N days of today, in any past year ("on this day" anniversaries).',
             properties: {
               type: { const: 'anniversary' },

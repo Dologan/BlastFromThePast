@@ -28,6 +28,9 @@ interface Grain {
   trackScopeForPlaylist: string; // condition tying playlist_log_tracks to this grain
   lovedExists: (sourceCond: string) => string;
   playlistExists: (recentCond: string) => string;
+  /** Wraps a year-comparison condition (given the release_date column to compare) in whatever
+   * join/EXISTS scaffolding this grain needs to reach an album's release_date. */
+  releaseDateExists: (yearCond: (col: string) => string) => string;
 }
 
 function toEpoch(date: string, endOfDay = false): number {
@@ -73,6 +76,11 @@ function grainFor(mode: 'tracks' | 'albums'): Grain {
         `EXISTS (SELECT 1 FROM liked_tracks lt WHERE lt.track_id = t.id${sourceCond})`,
       playlistExists: (recentCond) =>
         `EXISTS (SELECT 1 FROM playlist_log_tracks plt JOIN playlist_log pl ON pl.id = plt.playlist_log_id WHERE plt.track_id = t.id AND ${recentCond})`,
+      // A track has no single deterministic album, so "release date" means
+      // "was scrobbled under a qualifying album" -- same EXISTS shape as
+      // lovedExists/playlistExists above.
+      releaseDateExists: (yearCond) =>
+        `EXISTS (SELECT 1 FROM scrobbles s4 JOIN albums al4 ON al4.id = s4.album_id WHERE s4.track_id = t.id AND al4.release_date IS NOT NULL AND ${yearCond('al4.release_date')})`,
     };
   }
   return {
@@ -89,6 +97,8 @@ function grainFor(mode: 'tracks' | 'albums'): Grain {
       `EXISTS (SELECT 1 FROM scrobbles s JOIN liked_tracks lt ON lt.track_id = s.track_id WHERE s.album_id = al.id${sourceCond})`,
     playlistExists: (recentCond) =>
       `EXISTS (SELECT 1 FROM playlist_log_tracks plt JOIN playlist_log pl ON pl.id = plt.playlist_log_id JOIN scrobbles s ON s.track_id = plt.track_id WHERE s.album_id = al.id AND ${recentCond})`,
+    // al is already joined and unique per row -- no EXISTS needed.
+    releaseDateExists: (yearCond) => `(al.release_date IS NOT NULL AND ${yearCond('al.release_date')})`,
   };
 }
 
@@ -153,6 +163,18 @@ function compileClause(clause: Clause, g: Grain, ctx: CompileContext, params: un
       if (clause.anyOf.length === 0) return '1';
       const inClause = `a.country IN ${inList(clause.anyOf, params)}`;
       return clause.negate ? `(a.country IS NULL OR NOT (${inClause}))` : inClause;
+    }
+    case 'releaseDate': {
+      if (!clause.after && !clause.before) return '1';
+      // release_date is a partial-precision MusicBrainz date ('YYYY' is
+      // common), so comparisons are by year only -- the leading 4 characters
+      // of both the stored value and the clause's ISO bounds.
+      return g.releaseDateExists((col) => {
+        const parts: string[] = [];
+        if (clause.after) parts.push(`CAST(substr(${col}, 1, 4) AS INTEGER) >= ${parseInt(clause.after.slice(0, 4), 10)}`);
+        if (clause.before) parts.push(`CAST(substr(${col}, 1, 4) AS INTEGER) <= ${parseInt(clause.before.slice(0, 4), 10)}`);
+        return parts.join(' AND ');
+      });
     }
     case 'excludeRecentlyPlaylisted': {
       const recentCond = `pl.created_at >= ${ctx.nowSeconds - clause.days * 86400}`;

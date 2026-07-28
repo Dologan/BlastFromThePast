@@ -192,6 +192,66 @@ describe('compileRecipe (executed)', () => {
     expect(none.count).toBe(0);
   });
 
+  it('filters albums by release date range (year precision)', () => {
+    const albumId = (name: string) => (handle.sqlite.prepare('SELECT id FROM albums WHERE name = ?').get(name) as any).id;
+    handle.sqlite.prepare('UPDATE albums SET release_date = ? WHERE id = ?').run('2005-08-24', albumId('Ghost Reveries'));
+    handle.sqlite.prepare('UPDATE albums SET release_date = ? WHERE id = ?').run('2023-03-31', albumId('The Record'));
+    handle.sqlite.prepare('UPDATE albums SET release_date = ? WHERE id = ?').run('1998-04-20', albumId('Symbolic'));
+
+    const { rows } = run({
+      filters: [{ type: 'releaseDate', after: '2000-01-01' }],
+      output: output({ mode: 'albums' }),
+    });
+    expect(rows.map((r) => r.name).sort()).toEqual(['Ghost Reveries', 'The Record']);
+
+    const ranged = run({
+      filters: [{ type: 'releaseDate', after: '2004-01-01', before: '2010-12-31' }],
+      output: output({ mode: 'albums' }),
+    });
+    expect(ranged.rows.map((r) => r.name)).toEqual(['Ghost Reveries']);
+  });
+
+  it('releaseDate matches a year-only (partial-precision) MusicBrainz date', () => {
+    const albumId = (handle.sqlite.prepare("SELECT id FROM albums WHERE name = 'Symbolic'").get() as any).id;
+    handle.sqlite.prepare('UPDATE albums SET release_date = ? WHERE id = ?').run('1998', albumId);
+
+    const { rows } = run({
+      filters: [{ type: 'releaseDate', after: '1998-01-01', before: '1998-12-31' }],
+      output: output({ mode: 'albums' }),
+    });
+    expect(rows.map((r) => r.name)).toEqual(['Symbolic']);
+
+    // Outside the year entirely -> excluded.
+    expect(
+      run({ filters: [{ type: 'releaseDate', after: '1999-01-01' }], output: output({ mode: 'albums' }) }).count,
+    ).toBe(0);
+  });
+
+  it('releaseDate excludes albums with no release date at all', () => {
+    // No release_date set on any album in this fixture yet.
+    const { count } = run({
+      filters: [{ type: 'releaseDate', after: '1900-01-01' }],
+      output: output({ mode: 'albums' }),
+    });
+    expect(count).toBe(0);
+  });
+
+  it('releaseDate with neither bound matches everything (no-op clause)', () => {
+    const { count } = run({ filters: [{ type: 'releaseDate' }], output: output({ mode: 'albums' }) });
+    expect(count).toBe(3);
+  });
+
+  it('releaseDate on tracks grain matches via the track\'s scrobbled album', () => {
+    const albumId = (handle.sqlite.prepare("SELECT id FROM albums WHERE name = 'Ghost Reveries'").get() as any).id;
+    handle.sqlite.prepare('UPDATE albums SET release_date = ? WHERE id = ?').run('2005-08-24', albumId);
+
+    const { rows } = run({
+      filters: [{ type: 'releaseDate', after: '2000-01-01' }],
+      output: output({ mode: 'tracks' }),
+    });
+    expect(rows.map((r) => r.artist_name)).toEqual(['Opeth']);
+  });
+
   it('filters by playcount range', () => {
     const { rows } = run({
       filters: [{ type: 'playcount', min: 3 }],

@@ -130,4 +130,90 @@ describe('enrichment API', () => {
 
     await app.close();
   });
+
+  it('enriches album release dates via /api/enrich/albums and surfaces them in the summary', async () => {
+    handle = openDb(':memory:');
+    const seed = handle.sqlite;
+    const a1 = Number(
+      seed.prepare('INSERT INTO artists (name, name_normalized) VALUES (?, ?)').run('Opeth', 'opeth').lastInsertRowid,
+    );
+    seed
+      .prepare('INSERT INTO albums (artist_id, name, name_normalized, mbid) VALUES (?, ?, ?, ?)')
+      .run(a1, 'Ghost Reveries', 'ghost reveries', 'rg-ghost-reveries');
+
+    const fakeMb = {
+      async searchReleaseGroup() {
+        return null;
+      },
+      async lookupReleaseGroup(mbid: string) {
+        return mbid === 'rg-ghost-reveries' ? { firstReleaseDate: '2005-08-24' } : null;
+      },
+    } as unknown as MusicBrainzClient;
+
+    // Deliberately no createLastfmClient / API key -- album enrichment is
+    // MusicBrainz-only and must not need either.
+    const app = buildApp({ handle, createMusicBrainzClient: () => fakeMb });
+
+    const start = await app.inject({ method: 'POST', url: '/api/enrich/albums' });
+    expect(start.statusCode).toBe(202);
+
+    for (let i = 0; i < 50; i++) {
+      const st = await app.inject({ method: 'GET', url: '/api/sync/status' });
+      if (!st.json().running) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const summary = (await app.inject({ method: 'GET', url: '/api/library/summary' })).json();
+    expect(summary.albumEnrichment).toEqual({ enriched: 1, pending: 0, errored: 0, withDate: 1 });
+
+    await app.close();
+  });
+
+  it('reprocesses album release dates from cache via the route with zero client calls', async () => {
+    handle = openDb(':memory:');
+    const seed = handle.sqlite;
+    const a1 = Number(
+      seed.prepare('INSERT INTO artists (name, name_normalized) VALUES (?, ?)').run('Opeth', 'opeth').lastInsertRowid,
+    );
+    const album = Number(
+      seed
+        .prepare('INSERT INTO albums (artist_id, name, name_normalized, mbid) VALUES (?, ?, ?, ?)')
+        .run(a1, 'Ghost Reveries', 'ghost reveries', 'rg-ghost-reveries').lastInsertRowid,
+    );
+    // Pre-populate the cache as if a fetch already happened.
+    seed
+      .prepare(
+        `INSERT INTO mb_release_group_cache (mbid, found, release_date, fetched_at)
+         VALUES ('rg-ghost-reveries', 1, '2005-08-24', 0)`,
+      )
+      .run();
+
+    let clientFactoryCalls = 0;
+    const app = buildApp({
+      handle,
+      createMusicBrainzClient: () => {
+        clientFactoryCalls++;
+        throw new Error('should not be called during reprocess');
+      },
+    });
+
+    const start = await app.inject({
+      method: 'POST',
+      url: '/api/enrich/albums',
+      payload: { reprocess: true },
+    });
+    expect(start.statusCode).toBe(202);
+
+    for (let i = 0; i < 50; i++) {
+      const st = await app.inject({ method: 'GET', url: '/api/sync/status' });
+      if (!st.json().running) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(clientFactoryCalls).toBe(0);
+    const row = seed.prepare('SELECT release_date FROM albums WHERE id = ?').get(album) as { release_date: string | null };
+    expect(row.release_date).toBe('2005-08-24');
+
+    await app.close();
+  });
 });

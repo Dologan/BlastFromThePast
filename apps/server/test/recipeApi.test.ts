@@ -66,6 +66,40 @@ describe('recipe API', () => {
     expect(body.rows[0].tidalUrl).toContain('tidal.com/search');
   });
 
+  it('previews a recipe filtered by album release date, end-to-end through the HTTP route', async () => {
+    const s = handle.sqlite;
+    const opeth = (s.prepare("SELECT id FROM artists WHERE name = 'Opeth'").get() as any).id;
+    const opethTrack = (s.prepare("SELECT id FROM tracks WHERE name = 'Ghost of Perdition'").get() as any).id;
+    const albumId = Number(
+      s
+        .prepare("INSERT INTO albums (artist_id, name, name_normalized, release_date) VALUES (?, 'Ghost Reveries', 'ghost reveries', '2005-08-24')")
+        .run(opeth).lastInsertRowid,
+    );
+    s.prepare('INSERT INTO scrobbles (track_id, album_id, uts) VALUES (?, ?, ?)').run(opethTrack, albumId, NOW - 5 * YEAR + 3 * 86400);
+    rebuildStats(s);
+
+    const matching = await app.inject({
+      method: 'POST',
+      url: '/api/recipes/preview',
+      payload: {
+        filters: [{ type: 'releaseDate', after: '2000-01-01', before: '2010-12-31' }],
+        output: { mode: 'tracks', sort: 'neglect', limit: 10 },
+      },
+    });
+    expect(matching.json().matched).toBe(1);
+    expect(matching.json().rows[0].artistName).toBe('Opeth');
+
+    const nonMatching = await app.inject({
+      method: 'POST',
+      url: '/api/recipes/preview',
+      payload: {
+        filters: [{ type: 'releaseDate', after: '2020-01-01' }],
+        output: { mode: 'tracks', sort: 'neglect', limit: 10 },
+      },
+    });
+    expect(nonMatching.json().matched).toBe(0);
+  });
+
   it('rejects a malformed recipe', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/recipes/preview', payload: { nope: true } });
     expect(res.statusCode).toBe(400);

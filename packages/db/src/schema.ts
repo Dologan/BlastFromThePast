@@ -32,6 +32,8 @@ export const albums = sqliteTable(
     name: text('name').notNull(),
     nameNormalized: text('name_normalized').notNull(),
     mbid: text('mbid'),
+    releaseDate: text('release_date'),
+    releaseDateStatus: text('release_date_status').notNull().default('pending'),
   },
   (t) => [uniqueIndex('albums_artist_name_unique').on(t.artistId, t.nameNormalized)],
 );
@@ -205,6 +207,20 @@ export const mbArtistCache = sqliteTable('mb_artist_cache', {
 export const lastfmTagsCache = sqliteTable('lastfm_tags_cache', {
   cacheKey: text('cache_key').primaryKey(),
   tagsJson: text('tags_json').notNull(),
+  fetchedAt: integer('fetched_at').notNull(),
+});
+
+export const mbReleaseSearchCache = sqliteTable('mb_release_search_cache', {
+  queryNormalized: text('query_normalized').primaryKey(),
+  mbid: text('mbid'),
+  score: real('score'),
+  fetchedAt: integer('fetched_at').notNull(),
+});
+
+export const mbReleaseGroupCache = sqliteTable('mb_release_group_cache', {
+  mbid: text('mbid').primaryKey(),
+  found: integer('found').notNull(),
+  releaseDate: text('release_date'),
   fetchedAt: integer('fetched_at').notNull(),
 });
 

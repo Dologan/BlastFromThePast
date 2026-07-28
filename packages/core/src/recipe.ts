@@ -20,6 +20,10 @@ export type Clause =
   | ({ type: 'firstListen' } & DateBound)
   | ({ type: 'lastListen' } & DateBound)
   | ({ type: 'peakMonth' } & DateBound)
+  // Album release date. Compared by YEAR only (release_date is a
+  // partial-precision MusicBrainz date, often just 'YYYY') -- after/before
+  // are truncated to their leading 4 characters when compiled.
+  | ({ type: 'releaseDate' } & DateBound)
   | { type: 'notPlayedInDays'; days: number }
   | { type: 'playedInDays'; days: number }
   | { type: 'playcount'; min?: number; max?: number }
