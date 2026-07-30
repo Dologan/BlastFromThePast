@@ -1,0 +1,22 @@
+# Local basic-auth gate sitting in front of the app, used only by the
+# Tailscale Funnel (public internet) path. Listens on loopback only —
+# Tailscale is what actually exposes it publicly, this just adds the
+# password check.
+#
+# Generate the hash with: caddy hash-password
+# It prints a raw "$2a$14$..." bcrypt string, but this field needs that
+# string BASE64-ENCODED (a known inconsistency between the tool and the
+# Caddyfile format) -- e.g.:
+#   HASH=$(caddy hash-password); printf '%s' "$HASH" | base64 -w0; echo
+# Paste that base64 output (not the raw "$2a$..." string) as
+# <hashed-password> below. Pasting the raw bcrypt string instead fails with
+# "base64-decoding password: illegal base64 data ..." because Caddy tries
+# to base64-decode it and hits the "$" characters.
+# Replace <username> and <hashed-password> below with your own.
+
+http://127.0.0.1:8766 {
+	basic_auth {
+		<username> <hashed-password>
+	}
+	reverse_proxy 127.0.0.1:8765
+}
