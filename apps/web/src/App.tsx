@@ -12,6 +12,7 @@ import {
   type SyncStatus,
   type TopArtists,
   type TopArtistsRange,
+  type VersionInfo,
 } from './api';
 import RecipeBuilder from './RecipeBuilder';
 import Curator from './Curator';
@@ -717,6 +718,25 @@ function Dashboard() {
 
 type Tab = 'dashboard' | 'builder' | 'curator';
 
+/** Discreet build/version marker -- the fastest way to tell whether a
+ * deployment is stale (its commit not matching what's expected on GitHub)
+ * without digging into the server. */
+function Footer() {
+  const [version, setVersion] = useState<VersionInfo | null>(null);
+  useEffect(() => {
+    api.getVersion().then(setVersion).catch(() => {});
+  }, []);
+  if (!version) return null;
+  const date = version.commitDate ? new Date(version.commitDate).toLocaleDateString() : null;
+  return (
+    <footer className="app-footer">
+      v{version.version}
+      {version.commit && ` · ${version.commit}`}
+      {date && ` · ${date}`}
+    </footer>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('dashboard');
   return (
@@ -739,6 +759,7 @@ export default function App() {
         </nav>
       </header>
       {tab === 'dashboard' ? <Dashboard /> : tab === 'builder' ? <RecipeBuilder /> : <Curator />}
+      <Footer />
     </main>
   );
 }

@@ -16,6 +16,12 @@ export interface AuthStatus {
   tidal: { connected: boolean; clientIdSet: boolean };
 }
 
+export interface VersionInfo {
+  version: string;
+  commit: string | null;
+  commitDate: string | null;
+}
+
 export interface UnmatchedTrack {
   trackId: number;
   name: string;
@@ -371,6 +377,7 @@ export const api = {
       body: JSON.stringify({ reprocess: true }),
     }),
   getSyncStatus: () => request<SyncStatus>('/api/sync/status'),
+  getVersion: () => request<VersionInfo>('/api/version'),
   getLibrarySummary: () => request<LibrarySummary>('/api/library/summary'),
   getInsights: (kind: InsightKind, limit: number) =>
     request<Insights>(`/api/library/insights?kind=${kind}&limit=${limit}`),

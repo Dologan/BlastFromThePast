@@ -8,6 +8,7 @@ import { JobManager } from './sync/jobManager.js';
 import { MusicBrainzClient } from './enrich/musicbrainz.js';
 import { Enrichment } from './enrich/enrichment.js';
 import { AlbumEnrichment } from './enrich/albumEnrichment.js';
+import { VERSION } from './version.js';
 import { RecipeService } from './recipes/recipeService.js';
 import { TokenCrypto } from './auth/crypto.js';
 import { TokenStore } from './auth/tokenStore.js';
@@ -103,6 +104,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   app.get('/api/health', async () => ({ ok: true }));
+
+  app.get('/api/version', async () => VERSION);
 
   app.get('/api/settings', async () => {
     return {
