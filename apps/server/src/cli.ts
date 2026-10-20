@@ -31,7 +31,7 @@ const EXIT_BUSY = 75;
 const USAGE = `Usage: cli <job> [--reprocess] [service]
 
 Jobs:
-  all                          Every job below whose service is configured, in order
+  all                          Quick maintenance jobs (below) whose service is configured, in order
   lastfm-sync                  Incremental Last.fm scrobble sync
   enrich                       Artist country/genre enrichment (MusicBrainz + Last.fm tags)
   enrich --reprocess           Re-derive artist rows from cached responses (no network)
@@ -52,16 +52,16 @@ function parseService(raw: string | undefined): ServiceName {
 type Run = (job: string, positional: string[], reprocess: boolean, handle: DbHandle) => Promise<unknown>;
 
 /**
- * Runs each job in turn, skipping those whose service isn't configured. A job that
- * fails is recorded and the rest still run; the exit status is 1 if any failed.
+ * Runs the quick maintenance jobs in turn, skipping those whose service isn't
+ * configured. The MusicBrainz enrichment jobs are left out on purpose: they make
+ * slow network calls and are run by hand. A job that fails is recorded and the
+ * rest still run; the exit status is 1 if any failed.
  */
 async function runAll(handle: DbHandle, auth: AuthManager, run: Run): Promise<Record<string, unknown>> {
   const lastfmApiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
   const lastfmUsername = getSetting(handle, SETTING_KEYS.lastfmUsername);
   const steps: [string, string | null][] = [
     ['lastfm-sync', lastfmUsername && lastfmApiKey ? null : 'Last.fm username or API key not configured'],
-    ['enrich', lastfmApiKey ? null : 'Last.fm API key not configured'],
-    ['enrich-albums', null],
     ['spotify-liked', auth.isAuthorized('spotify') ? null : 'Spotify not connected'],
     ['tidal-liked', auth.isAuthorized('tidal') ? null : 'TIDAL not connected'],
     ['playlists', SERVICES.some((s) => auth.isAuthorized(s)) ? null : 'no streaming service connected'],

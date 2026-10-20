@@ -352,7 +352,7 @@ inventory) can run from the host without the web UI. `deploy/bftp-cli.sh`
 loads `deploy/bftp.env`, so it opens the same database as the service:
 
 ```
-deploy/bftp-cli.sh all                        # everything below that is configured
+deploy/bftp-cli.sh all                        # quick maintenance jobs (see below)
 deploy/bftp-cli.sh lastfm-sync                # incremental scrobble sync
 deploy/bftp-cli.sh enrich                     # artist country/genre enrichment
 deploy/bftp-cli.sh enrich --reprocess         # re-derive from cache, no network
@@ -362,10 +362,12 @@ deploy/bftp-cli.sh tidal-liked                # import TIDAL liked tracks
 deploy/bftp-cli.sh playlists [spotify|tidal]  # refresh playlist inventory
 ```
 
-`all` runs the jobs in order (Last.fm sync, artist enrichment, album dates,
-Spotify and TIDAL liked imports, playlist inventory) and skips any whose
-service isn't configured. If one job fails, the rest still run, and the exit
-status is 1 at the end. It holds one job lock for the whole run.
+`all` runs the quick maintenance jobs in order (Last.fm sync, Spotify and
+TIDAL liked imports, playlist inventory) and skips any whose service isn't
+configured. It never calls MusicBrainz, so the slow enrichment jobs
+(`enrich`, `enrich-albums`) are run by hand. If one job fails, the rest still
+run, and the exit status is 1 at the end. It holds one job lock for the whole
+run.
 
 Each run prints a JSON result on stdout and progress on stderr, and exits
 non-zero on failure. Settings (Last.fm username and API key, connected
