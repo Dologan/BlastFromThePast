@@ -28,6 +28,9 @@ export type Clause =
   | { type: 'playedInDays'; days: number }
   | { type: 'playcount'; min?: number; max?: number }
   | { type: 'loved'; source?: 'lastfm' | 'spotify' | 'tidal' }
+  // Liked on any service, with the like dated within the last `days` days.
+  // Tracks with no like date (the service didn't report one) don't match.
+  | { type: 'likedInDays'; days: number }
   | { type: 'genre'; anyOf: string[]; mode?: 'canonical' | 'raw'; negate?: boolean }
   | { type: 'country'; anyOf: string[]; negate?: boolean }
   | { type: 'excludeRecentlyPlaylisted'; days: number }

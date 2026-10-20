@@ -266,6 +266,18 @@ describe('compileRecipe (executed)', () => {
     expect(run({ filters: [{ type: 'loved', source: 'spotify' }], output: output() }).count).toBe(0);
   });
 
+  it('likedInDays matches likes dated within the window, from any source, at both grains', () => {
+    const s = handle.sqlite;
+    const death = s.prepare("SELECT id FROM tracks WHERE name = 'Crystal Mountain'").get() as { id: number };
+    s.prepare("INSERT INTO liked_tracks (track_id, source, liked_at) VALUES (?, 'tidal', ?)").run(death.id, NOW - 10 * DAY);
+
+    // Death's like is 10 days old; Opeth's is 5 years old.
+    expect(run({ filters: [{ type: 'likedInDays', days: 365 }], output: output() }).rows.map((r) => r.artist_name)).toEqual(['Death']);
+    expect(run({ filters: [{ type: 'likedInDays', days: 6 * 365 }], output: output() }).count).toBe(2);
+    // The album containing the liked track matches on the albums grain.
+    expect(run({ filters: [{ type: 'likedInDays', days: 365 }], output: output({ mode: 'albums' }) }).count).toBe(1);
+  });
+
   it('neglect sort ranks played-a-lot-but-long-ago first', () => {
     const { rows } = run({ filters: [], output: output({ sort: 'neglect' }) });
     expect(rows[0].artist_name).toBe('Opeth');

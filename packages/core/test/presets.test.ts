@@ -14,6 +14,16 @@ describe('PRESETS', () => {
     }
   });
 
+  it('includes "Recent preliminary favourites": 20 random likes from the last year, under 5 plays', () => {
+    const preset = PRESETS.find((p) => p.id === 'recent-preliminary-favourites');
+    expect(preset?.name).toBe('Recent preliminary favourites');
+    expect(preset?.definition.filters).toEqual([
+      { type: 'likedInDays', days: 365 },
+      { type: 'playcount', max: 4 },
+    ]);
+    expect(preset?.definition.output).toEqual({ mode: 'tracks', sort: 'random', limit: 20 });
+  });
+
   it('includes an anniversary-based "on this day" preset', () => {
     const onThisDay = PRESETS.find((p) => p.id === 'on-this-day');
     expect(onThisDay?.definition.filters.some((f) => f.type === 'anniversary')).toBe(true);
