@@ -36,6 +36,18 @@ export const PRESETS: Preset[] = [
     },
   },
   {
+    id: 'recent-preliminary-favourites',
+    name: 'Recent preliminary favourites',
+    description: 'A random 20 of what you liked in the last year and have played fewer than 5 times.',
+    definition: {
+      filters: [
+        { type: 'likedInDays', days: 365 },
+        { type: 'playcount', max: 4 },
+      ],
+      output: { mode: 'tracks', sort: 'random', limit: 20 },
+    },
+  },
+  {
     id: 'deep-cuts',
     name: 'Deep cuts of a genre',
     description: 'Pick a genre — lesser-played tracks you loved but let slip.',

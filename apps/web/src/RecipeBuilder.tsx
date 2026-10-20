@@ -38,6 +38,7 @@ const CLAUSE_LABELS: Record<ClauseType, string> = {
   releaseDate: 'Released between',
   playcount: 'Play count',
   loved: 'Loved / liked',
+  likedInDays: 'Liked within…',
   excludeRecentlyPlaylisted: 'Exclude recently playlisted',
 };
 
@@ -54,6 +55,7 @@ const CLAUSE_ORDER: ClauseType[] = [
   'releaseDate',
   'playcount',
   'loved',
+  'likedInDays',
   'excludeRecentlyPlaylisted',
 ];
 
@@ -67,6 +69,8 @@ function defaultClause(type: ClauseType): Clause {
       return { type, days: 730 };
     case 'playedInDays':
       return { type, days: 90 };
+    case 'likedInDays':
+      return { type, days: 365 };
     case 'gapDays':
       return { type, infinite: true };
     case 'firstListen':
@@ -164,6 +168,7 @@ function ClauseEditor({
       );
     case 'notPlayedInDays':
     case 'playedInDays':
+    case 'likedInDays':
     case 'excludeRecentlyPlaylisted':
       return <DaysInput days={clause.days} onChange={(days) => onChange({ ...clause, days })} />;
     case 'gapDays':

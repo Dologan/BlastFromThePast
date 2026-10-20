@@ -27,6 +27,12 @@ interface Grain {
   entityKind: 'track' | 'album';
   trackScopeForPlaylist: string; // condition tying playlist_log_tracks to this grain
   lovedExists: (sourceCond: string) => string;
+  /**
+   * Liked (any source) since the given unix-seconds cutoff. A like with no date
+   * counts as liked when the track was first played since the cutoff: liking a
+   * track before ever playing it is unusual, so that's a fair stand-in.
+   */
+  likedSince: (cutoff: number) => string;
   playlistExists: (recentCond: string) => string;
   /** Wraps a year-comparison condition (given the release_date column to compare) in whatever
    * join/EXISTS scaffolding this grain needs to reach an album's release_date. */
@@ -74,6 +80,8 @@ function grainFor(mode: 'tracks' | 'albums'): Grain {
       trackScopeForPlaylist: 'plt.track_id = t.id',
       lovedExists: (sourceCond) =>
         `EXISTS (SELECT 1 FROM liked_tracks lt WHERE lt.track_id = t.id${sourceCond})`,
+      likedSince: (cutoff) =>
+        `EXISTS (SELECT 1 FROM liked_tracks lt WHERE lt.track_id = t.id AND (lt.liked_at >= ${cutoff} OR (lt.liked_at IS NULL AND ts.first_listen >= ${cutoff})))`,
       playlistExists: (recentCond) =>
         `EXISTS (SELECT 1 FROM playlist_log_tracks plt JOIN playlist_log pl ON pl.id = plt.playlist_log_id WHERE plt.track_id = t.id AND ${recentCond})`,
       // A track has no single deterministic album, so "release date" means
@@ -95,6 +103,8 @@ function grainFor(mode: 'tracks' | 'albums'): Grain {
     // An album is "loved" if it contains a loved track scrobbled under it.
     lovedExists: (sourceCond) =>
       `EXISTS (SELECT 1 FROM scrobbles s JOIN liked_tracks lt ON lt.track_id = s.track_id WHERE s.album_id = al.id${sourceCond})`,
+    likedSince: (cutoff) =>
+      `EXISTS (SELECT 1 FROM scrobbles s JOIN liked_tracks lt ON lt.track_id = s.track_id JOIN track_stats tst ON tst.track_id = lt.track_id WHERE s.album_id = al.id AND (lt.liked_at >= ${cutoff} OR (lt.liked_at IS NULL AND tst.first_listen >= ${cutoff})))`,
     playlistExists: (recentCond) =>
       `EXISTS (SELECT 1 FROM playlist_log_tracks plt JOIN playlist_log pl ON pl.id = plt.playlist_log_id JOIN scrobbles s ON s.track_id = plt.track_id WHERE s.album_id = al.id AND ${recentCond})`,
     // al is already joined and unique per row -- no EXISTS needed.
@@ -141,6 +151,8 @@ function compileClause(clause: Clause, g: Grain, ctx: CompileContext, params: un
       if (clause.max !== undefined) parts.push(`${S}.playcount <= ${Math.floor(clause.max)}`);
       return parts.length ? parts.join(' AND ') : '1';
     }
+    case 'likedInDays':
+      return g.likedSince(Math.floor(ctx.nowSeconds - clause.days * 86400));
     case 'loved': {
       let sourceCond = '';
       if (clause.source) {

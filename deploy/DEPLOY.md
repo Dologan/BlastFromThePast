@@ -344,3 +344,71 @@ client's mcporter config) — see the "Cloud VPS → home" topology in
   from the URL configured there.
 - Rotate the basic-auth password by re-running `caddy hash-password` and
   updating the Caddyfile(s), then `systemctl reload caddy`.
+
+## 9. Running sync and enrich jobs from cron
+
+The background jobs (Last.fm sync, enrichment, liked-track import, playlist
+inventory) can run from the host without the web UI. `deploy/bftp-cli.sh`
+loads `deploy/bftp.env`, so it opens the same database as the service:
+
+```
+deploy/bftp-cli.sh all                        # quick maintenance jobs (see below)
+deploy/bftp-cli.sh lastfm-sync                # incremental scrobble sync
+deploy/bftp-cli.sh enrich                     # artist country/genre enrichment
+deploy/bftp-cli.sh enrich --reprocess         # re-derive from cache, no network
+deploy/bftp-cli.sh enrich-albums              # album release dates
+deploy/bftp-cli.sh spotify-liked              # import Spotify liked tracks
+deploy/bftp-cli.sh tidal-liked                # import TIDAL liked tracks
+deploy/bftp-cli.sh playlists [spotify|tidal]  # refresh playlist inventory
+```
+
+`all` runs the maintenance jobs in order (Last.fm sync, artist and album
+enrichment, Spotify and TIDAL liked imports, playlist inventory) and skips any
+whose service isn't configured. The enrichment jobs are slow on their first
+run, so `all` skips each one until its first run has finished, and reports
+that in the output. Run that first pass by hand:
+
+```
+deploy/bftp-cli.sh enrich
+deploy/bftp-cli.sh enrich-albums
+```
+
+After that, `all` keeps them up to date. If one job fails, the rest still run,
+and the exit status is 1 at the end. It holds one job lock for the whole run.
+
+Each run prints a JSON result on stdout and progress on stderr, and exits
+non-zero on failure. Settings (Last.fm username and API key, connected
+services) are read from the database, so set them up in the web UI first.
+
+Run it as the same user that owns the database (`bftp`), or the database and
+`secret.key` will end up with the wrong ownership. Example crontab for that
+user (`sudo -u bftp crontab -e`):
+
+```
+# m h  dom mon dow  command
+15  4    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh all
+
+# Or, for different schedules per job:
+# 15  *    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh lastfm-sync
+# 30  4    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh enrich
+# 0   5    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh spotify-liked
+```
+
+`flock -n` stops two cron jobs from overlapping. The CLI and the web server
+also share a job lock (`job.lock` next to the database), so they can't run
+jobs at the same time either:
+
+- If a cron job is running, the web UI disables its sync buttons and shows
+  which job is running on the host. The server also refuses those jobs with
+  a 409.
+- If a UI job is running, the CLI exits with status `75` (`EX_TEMPFAIL`)
+  without doing anything. Cron logs it and the next scheduled run tries again.
+
+A lock left behind by a crashed process is cleared automatically.
+
+`deploy/bftp-cli.sh` runs the service's own Node (`/usr/bin/node`), because
+`better-sqlite3` is a native module built for one Node version. A login shell
+can have a different `node` first on `PATH`, which fails with
+`NODE_MODULE_VERSION` errors. Set `BFTP_NODE=` in `deploy/bftp.env` to use a
+different binary. Whatever Node you pick, the service must run on the same one,
+so after changing Node, rebuild with `npm rebuild better-sqlite3`.
