@@ -31,6 +31,7 @@ const EXIT_BUSY = 75;
 const USAGE = `Usage: cli <job> [--reprocess] [service]
 
 Jobs:
+  all                          Every job below whose service is configured, in order
   lastfm-sync                  Incremental Last.fm scrobble sync
   enrich                       Artist country/genre enrichment (MusicBrainz + Last.fm tags)
   enrich --reprocess           Re-derive artist rows from cached responses (no network)
@@ -46,6 +47,47 @@ so configure them in the web UI once before running these jobs.`;
 function parseService(raw: string | undefined): ServiceName {
   if (raw === 'spotify' || raw === 'tidal') return raw;
   throw new Error(`Unknown service "${raw}". Expected spotify or tidal.`);
+}
+
+type Run = (job: string, positional: string[], reprocess: boolean, handle: DbHandle) => Promise<unknown>;
+
+/**
+ * Runs each job in turn, skipping those whose service isn't configured. A job that
+ * fails is recorded and the rest still run; the exit status is 1 if any failed.
+ */
+async function runAll(handle: DbHandle, auth: AuthManager, run: Run): Promise<Record<string, unknown>> {
+  const lastfmApiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
+  const lastfmUsername = getSetting(handle, SETTING_KEYS.lastfmUsername);
+  const steps: [string, string | null][] = [
+    ['lastfm-sync', lastfmUsername && lastfmApiKey ? null : 'Last.fm username or API key not configured'],
+    ['enrich', lastfmApiKey ? null : 'Last.fm API key not configured'],
+    ['enrich-albums', null],
+    ['spotify-liked', auth.isAuthorized('spotify') ? null : 'Spotify not connected'],
+    ['tidal-liked', auth.isAuthorized('tidal') ? null : 'TIDAL not connected'],
+    ['playlists', SERVICES.some((s) => auth.isAuthorized(s)) ? null : 'no streaming service connected'],
+  ];
+
+  const results: Record<string, unknown> = {};
+  const failed: string[] = [];
+  for (const [step, skipReason] of steps) {
+    if (skipReason) {
+      console.error(`[bftp-cli] skipping ${step}: ${skipReason}`);
+      results[step] = { skipped: skipReason };
+      continue;
+    }
+    console.error(`[bftp-cli] ${new Date().toISOString()} start ${step}`);
+    try {
+      results[step] = await run(step, [], false, handle);
+      console.error(`[bftp-cli] ${new Date().toISOString()} done ${step}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[bftp-cli] ${step} failed: ${message}`);
+      failed.push(step);
+      results[step] = { error: message };
+    }
+  }
+  if (failed.length > 0) process.exitCode = 1;
+  return results;
 }
 
 async function run(job: string, positional: string[], reprocess: boolean, handle: DbHandle): Promise<unknown> {
@@ -68,6 +110,9 @@ async function run(job: string, positional: string[], reprocess: boolean, handle
   };
 
   switch (job) {
+    case 'all':
+      return runAll(handle, auth, run);
+
     case 'lastfm-sync': {
       const username = getSetting(handle, SETTING_KEYS.lastfmUsername);
       if (!username) throw new Error('Configure a Last.fm username first.');

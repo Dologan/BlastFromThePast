@@ -352,6 +352,7 @@ inventory) can run from the host without the web UI. `deploy/bftp-cli.sh`
 loads `deploy/bftp.env`, so it opens the same database as the service:
 
 ```
+deploy/bftp-cli.sh all                        # everything below that is configured
 deploy/bftp-cli.sh lastfm-sync                # incremental scrobble sync
 deploy/bftp-cli.sh enrich                     # artist country/genre enrichment
 deploy/bftp-cli.sh enrich --reprocess         # re-derive from cache, no network
@@ -360,6 +361,11 @@ deploy/bftp-cli.sh spotify-liked              # import Spotify liked tracks
 deploy/bftp-cli.sh tidal-liked                # import TIDAL liked tracks
 deploy/bftp-cli.sh playlists [spotify|tidal]  # refresh playlist inventory
 ```
+
+`all` runs the jobs in order (Last.fm sync, artist enrichment, album dates,
+Spotify and TIDAL liked imports, playlist inventory) and skips any whose
+service isn't configured. If one job fails, the rest still run, and the exit
+status is 1 at the end. It holds one job lock for the whole run.
 
 Each run prints a JSON result on stdout and progress on stderr, and exits
 non-zero on failure. Settings (Last.fm username and API key, connected
@@ -371,10 +377,12 @@ user (`sudo -u bftp crontab -e`):
 
 ```
 # m h  dom mon dow  command
-15  *    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh lastfm-sync
-30  4    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh enrich
-45  4    *   *   0   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh enrich-albums
-0   5    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh spotify-liked
+15  4    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh all
+
+# Or, for different schedules per job:
+# 15  *    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh lastfm-sync
+# 30  4    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh enrich
+# 0   5    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh spotify-liked
 ```
 
 `flock -n` stops two cron jobs from overlapping. The CLI and the web server
