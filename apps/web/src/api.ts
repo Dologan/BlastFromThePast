@@ -172,6 +172,14 @@ export type JobProgress =
   | CuratePushProgress
   | UnlikeProgress;
 
+/** A background job holding the cross-process lock: this server, or the host CLI run by cron. */
+export interface JobLock {
+  job: string;
+  source: 'cli' | 'server';
+  pid: number;
+  startedAt: number;
+}
+
 export interface SyncStatus {
   running: boolean;
   job: string | null;
@@ -179,6 +187,7 @@ export interface SyncStatus {
   error: string | null;
   finishedAt: number | null;
   sources: { source: string; status: string; error: string | null; lastSyncedAt: number | null }[];
+  lock: JobLock | null;
 }
 
 export interface NamedWeight {

@@ -207,42 +207,51 @@ function SyncPanel({
   tidalConnected: boolean;
 }) {
   const running = status?.running ?? false;
+  // A job the host CLI (cron) is running holds the lock but isn't ours to show progress for.
+  const cronLock = status?.lock?.source === 'cli' ? status.lock : null;
+  const busy = running || status?.lock != null;
   return (
     <section className="panel">
       <h2>Sync</h2>
+      {cronLock && (
+        <p className="hint">
+          Background job <code>{cronLock.job}</code> is running on the host (started{' '}
+          {new Date(cronLock.startedAt).toLocaleTimeString()}). Sync controls are disabled until it finishes.
+        </p>
+      )}
       <div className="actions">
-        <button onClick={onSync} disabled={running}>
+        <button onClick={onSync} disabled={busy}>
           {running && status?.job === 'lastfm' ? 'Syncing…' : 'Sync Last.fm now'}
         </button>
-        <button onClick={onEnrich} disabled={running}>
+        <button onClick={onEnrich} disabled={busy}>
           {running && status?.job === 'enrich'
             ? 'Enriching…'
             : `Enrich artists${pendingEnrich > 0 ? ` (${pendingEnrich})` : ''}`}
         </button>
         {hasCache && (
-          <button onClick={onReprocess} disabled={running} title="Re-apply cached MusicBrainz/Last.fm data to the library without any network calls">
+          <button onClick={onReprocess} disabled={busy} title="Re-apply cached MusicBrainz/Last.fm data to the library without any network calls">
             {running && status?.job === 'enrich-reprocess' ? 'Reprocessing…' : 'Reprocess from cache'}
           </button>
         )}
-        <button onClick={onEnrichAlbums} disabled={running} title="Fetch album release dates from MusicBrainz, for the Recipe Builder's release date filter">
+        <button onClick={onEnrichAlbums} disabled={busy} title="Fetch album release dates from MusicBrainz, for the Recipe Builder's release date filter">
           {running && status?.job === 'enrich-albums'
             ? 'Fetching release dates…'
             : `Enrich albums${pendingAlbumEnrich > 0 ? ` (${pendingAlbumEnrich})` : ''}`}
         </button>
         {spotifyConnected && (
-          <button onClick={onImportLiked} disabled={running} title="Flag library tracks you've liked on Spotify">
+          <button onClick={onImportLiked} disabled={busy} title="Flag library tracks you've liked on Spotify">
             {running && status?.job === 'spotify-liked' ? 'Importing…' : 'Import Spotify liked'}
           </button>
         )}
         {tidalConnected && (
-          <button onClick={onImportTidalLiked} disabled={running} title="Flag library tracks you've liked on TIDAL">
+          <button onClick={onImportTidalLiked} disabled={busy} title="Flag library tracks you've liked on TIDAL">
             {running && status?.job === 'tidal-liked' ? 'Importing…' : 'Import TIDAL liked'}
           </button>
         )}
         {(spotifyConnected || tidalConnected) && (
           <button
             onClick={onSyncPlaylists}
-            disabled={running}
+            disabled={busy}
             title="Pull your actual playlists + tracks from connected services, so the Curator tab can see what's already playlisted"
           >
             {running && status?.job === 'playlist-inventory' ? 'Syncing playlists…' : 'Sync playlists'}
@@ -666,12 +675,15 @@ function Dashboard() {
     void refresh();
   }, [refresh]);
 
-  // Poll while a sync is running (and once more after it stops).
+  // Poll quickly while a job is running (in the UI or on the host), and every so often
+  // when idle so a cron job that starts later shows up. Each change of state refreshes once,
+  // so the final "finished" state is shown.
+  const busy = status?.running === true || status?.lock != null;
   useEffect(() => {
-    if (!status?.running) return;
-    const t = setInterval(refresh, 1500);
+    void refresh();
+    const t = setInterval(refresh, busy ? 1500 : 15000);
     return () => clearInterval(t);
-  }, [status?.running, refresh]);
+  }, [busy, refresh]);
 
   const runJob = async (start: () => Promise<unknown>) => {
     try {

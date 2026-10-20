@@ -15,6 +15,7 @@ import { AuthManager } from './auth/authManager.js';
 import { SpotifyConnector } from './connectors/spotify.js';
 import { TidalConnector } from './connectors/tidal.js';
 import { getSetting, SETTING_KEYS } from './settings.js';
+import { acquireJobLock, currentJobLock } from './sync/jobLock.js';
 import { MB_USER_AGENT } from './app.js';
 
 // Same resolution as index.ts, so the CLI and the server always share one DB.
@@ -23,6 +24,9 @@ const repoRoot = path.resolve(here, '..', '..', '..');
 const dbPath = process.env.BFTP_DB_PATH ?? path.join(repoRoot, 'data', 'library.db');
 
 const SERVICES: ServiceName[] = ['spotify', 'tidal'];
+
+// EX_TEMPFAIL: another job holds the lock. Cron can treat this as "try again later".
+const EXIT_BUSY = 75;
 
 const USAGE = `Usage: cli <job> [--reprocess] [service]
 
@@ -115,6 +119,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  const dataDir = path.dirname(dbPath);
+  const release = acquireJobLock(dataDir, job, 'cli');
+  if (!release) {
+    const held = currentJobLock(dataDir);
+    const since = held ? new Date(held.startedAt).toISOString() : 'unknown time';
+    console.error(
+      `[bftp-cli] skipped ${job}: ${held?.job ?? 'a job'} is already running (${held?.source ?? 'unknown'}, pid ${held?.pid ?? '?'}, since ${since})`,
+    );
+    process.exitCode = EXIT_BUSY;
+    return;
+  }
+
   const handle = openDb(dbPath);
   try {
     console.error(`[bftp-cli] ${new Date().toISOString()} start ${job} (db: ${dbPath})`);
@@ -123,6 +139,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(result));
   } finally {
     handle.close();
+    release();
   }
 }
 

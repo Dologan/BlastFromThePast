@@ -377,9 +377,21 @@ user (`sudo -u bftp crontab -e`):
 0   5    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh spotify-liked
 ```
 
-`flock -n` stops a job from starting while another cron job is still running.
-It doesn't coordinate with a job started from the web UI, so avoid triggering
-the same job by hand while cron is running it. The CLI runs under whichever
-`npm`/`node` the `PATH` resolves to, so use the same Node the systemd unit
-uses (see step 2). If cron's `PATH` differs, set `PATH=` at the top of the
-crontab.
+`flock -n` stops two cron jobs from overlapping. The CLI and the web server
+also share a job lock (`job.lock` next to the database), so they can't run
+jobs at the same time either:
+
+- If a cron job is running, the web UI disables its sync buttons and shows
+  which job is running on the host. The server also refuses those jobs with
+  a 409.
+- If a UI job is running, the CLI exits with status `75` (`EX_TEMPFAIL`)
+  without doing anything. Cron logs it and the next scheduled run tries again.
+
+A lock left behind by a crashed process is cleared automatically.
+
+`deploy/bftp-cli.sh` runs the service's own Node (`/usr/bin/node`), because
+`better-sqlite3` is a native module built for one Node version. A login shell
+can have a different `node` first on `PATH`, which fails with
+`NODE_MODULE_VERSION` errors. Set `BFTP_NODE=` in `deploy/bftp.env` to use a
+different binary. Whatever Node you pick, the service must run on the same one,
+so after changing Node, rebuild with `npm rebuild better-sqlite3`.

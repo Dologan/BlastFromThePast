@@ -1,3 +1,5 @@
+import { acquireJobLock } from './jobLock.js';
+
 export interface JobStatus {
   running: boolean;
   job: string | null;
@@ -7,7 +9,11 @@ export interface JobStatus {
   finishedAt: number | null;
 }
 
-/** Serializes background jobs: one sync at a time, status pollable by the UI. */
+/**
+ * Serializes background jobs: one sync at a time, status pollable by the UI.
+ * With `lockDir`, each job also takes the cross-process job lock so a host cron
+ * job and a UI-started job can't run at the same time.
+ */
 export class JobManager {
   private status: JobStatus = {
     running: false,
@@ -17,6 +23,8 @@ export class JobManager {
     finishedAt: null,
   };
 
+  constructor(private readonly lockDir?: string) {}
+
   getStatus(): JobStatus {
     return { ...this.status };
   }
@@ -25,9 +33,11 @@ export class JobManager {
     this.status.progress = p;
   };
 
-  /** Returns false if a job is already running. */
+  /** Returns false if a job is already running, in this process or on the host (cron). */
   start(name: string, fn: () => Promise<void>): boolean {
     if (this.status.running) return false;
+    const release = this.lockDir ? acquireJobLock(this.lockDir, name, 'server') : () => {};
+    if (!release) return false;
     this.status = { running: true, job: name, progress: null, error: null, finishedAt: null };
     void fn()
       .then(() => {
@@ -40,7 +50,8 @@ export class JobManager {
           error: err instanceof Error ? err.message : String(err),
           finishedAt: Date.now(),
         };
-      });
+      })
+      .finally(release);
     return true;
   }
 }

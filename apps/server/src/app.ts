@@ -5,6 +5,7 @@ import type { DbHandle } from '@bftp/db';
 import { LastfmClient } from './lastfm/client.js';
 import { LastfmSync } from './sync/lastfmSync.js';
 import { JobManager } from './sync/jobManager.js';
+import { currentJobLock } from './sync/jobLock.js';
 import { MusicBrainzClient } from './enrich/musicbrainz.js';
 import { Enrichment } from './enrich/enrichment.js';
 import { AlbumEnrichment } from './enrich/albumEnrichment.js';
@@ -62,7 +63,7 @@ export interface AppOptions {
 
 export function buildApp(opts: AppOptions): FastifyInstance {
   const { handle } = opts;
-  const jobs = new JobManager();
+  const jobs = new JobManager(opts.dataDir);
   const createClient = opts.createLastfmClient ?? ((apiKey: string) => new LastfmClient(apiKey));
   const createMb =
     opts.createMusicBrainzClient ?? (() => new MusicBrainzClient(MB_USER_AGENT));
@@ -219,7 +220,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const sources = handle.sqlite
       .prepare('SELECT source, status, error, last_synced_at AS lastSyncedAt FROM sync_state')
       .all();
-    return { ...jobs.getStatus(), sources };
+    const lock = opts.dataDir ? currentJobLock(opts.dataDir) : null;
+    return { ...jobs.getStatus(), sources, lock };
   });
 
   app.get('/api/library/summary', async () => {
