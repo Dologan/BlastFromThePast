@@ -89,7 +89,9 @@ export const RECIPE_JSON_SCHEMA = {
           },
           {
             type: 'object',
-            description: 'Liked on any service within the last N days ("liked in the past year" => days: 365).',
+            description:
+              'Liked on any service within the last N days ("liked in the past year" => days: 365). ' +
+              'A like with no date counts if the track was first played in that window.',
             properties: { type: { const: 'likedInDays' }, days: days('How recently it was liked') },
             required: ['type', 'days'],
           },
