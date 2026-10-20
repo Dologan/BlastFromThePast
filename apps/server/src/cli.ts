@@ -31,7 +31,7 @@ const EXIT_BUSY = 75;
 const USAGE = `Usage: cli <job> [--reprocess] [service]
 
 Jobs:
-  all                          Quick maintenance jobs (below) whose service is configured, in order
+  all                          Maintenance jobs (below) whose service is configured, in order
   lastfm-sync                  Incremental Last.fm scrobble sync
   enrich                       Artist country/genre enrichment (MusicBrainz + Last.fm tags)
   enrich --reprocess           Re-derive artist rows from cached responses (no network)
@@ -52,16 +52,33 @@ function parseService(raw: string | undefined): ServiceName {
 type Run = (job: string, positional: string[], reprocess: boolean, handle: DbHandle) => Promise<unknown>;
 
 /**
- * Runs the quick maintenance jobs in turn, skipping those whose service isn't
- * configured. The MusicBrainz enrichment jobs are left out on purpose: they make
- * slow network calls and are run by hand. A job that fails is recorded and the
- * rest still run; the exit status is 1 if any failed.
+ * Runs the maintenance jobs in turn, skipping those whose service isn't configured.
+ * The enrichment jobs are slow on their first run, so they only run once that
+ * first run has completed (at least one row enriched); until then, run them by
+ * hand. A job that fails is recorded and the rest still run; the exit status is 1
+ * if any failed.
  */
 async function runAll(handle: DbHandle, auth: AuthManager, run: Run): Promise<Record<string, unknown>> {
   const lastfmApiKey = getSetting(handle, SETTING_KEYS.lastfmApiKey);
   const lastfmUsername = getSetting(handle, SETTING_KEYS.lastfmUsername);
+  const enrichedCount = (table: string, column: string) =>
+    (handle.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = 'done'`).get() as { n: number }).n;
   const steps: [string, string | null][] = [
     ['lastfm-sync', lastfmUsername && lastfmApiKey ? null : 'Last.fm username or API key not configured'],
+    [
+      'enrich',
+      !lastfmApiKey
+        ? 'Last.fm API key not configured'
+        : enrichedCount('artists', 'enrich_status') === 0
+          ? 'first artist enrichment not run yet (run "enrich" by hand)'
+          : null,
+    ],
+    [
+      'enrich-albums',
+      enrichedCount('albums', 'release_date_status') === 0
+        ? 'first album enrichment not run yet (run "enrich-albums" by hand)'
+        : null,
+    ],
     ['spotify-liked', auth.isAuthorized('spotify') ? null : 'Spotify not connected'],
     ['tidal-liked', auth.isAuthorized('tidal') ? null : 'TIDAL not connected'],
     ['playlists', SERVICES.some((s) => auth.isAuthorized(s)) ? null : 'no streaming service connected'],

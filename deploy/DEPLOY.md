@@ -362,12 +362,19 @@ deploy/bftp-cli.sh tidal-liked                # import TIDAL liked tracks
 deploy/bftp-cli.sh playlists [spotify|tidal]  # refresh playlist inventory
 ```
 
-`all` runs the quick maintenance jobs in order (Last.fm sync, Spotify and
-TIDAL liked imports, playlist inventory) and skips any whose service isn't
-configured. It never calls MusicBrainz, so the slow enrichment jobs
-(`enrich`, `enrich-albums`) are run by hand. If one job fails, the rest still
-run, and the exit status is 1 at the end. It holds one job lock for the whole
-run.
+`all` runs the maintenance jobs in order (Last.fm sync, artist and album
+enrichment, Spotify and TIDAL liked imports, playlist inventory) and skips any
+whose service isn't configured. The enrichment jobs are slow on their first
+run, so `all` skips each one until its first run has finished, and reports
+that in the output. Run that first pass by hand:
+
+```
+deploy/bftp-cli.sh enrich
+deploy/bftp-cli.sh enrich-albums
+```
+
+After that, `all` keeps them up to date. If one job fails, the rest still run,
+and the exit status is 1 at the end. It holds one job lock for the whole run.
 
 Each run prints a JSON result on stdout and progress on stderr, and exits
 non-zero on failure. Settings (Last.fm username and API key, connected
