@@ -344,3 +344,42 @@ client's mcporter config) — see the "Cloud VPS → home" topology in
   from the URL configured there.
 - Rotate the basic-auth password by re-running `caddy hash-password` and
   updating the Caddyfile(s), then `systemctl reload caddy`.
+
+## 9. Running sync and enrich jobs from cron
+
+The background jobs (Last.fm sync, enrichment, liked-track import, playlist
+inventory) can run from the host without the web UI. `deploy/bftp-cli.sh`
+loads `deploy/bftp.env`, so it opens the same database as the service:
+
+```
+deploy/bftp-cli.sh lastfm-sync                # incremental scrobble sync
+deploy/bftp-cli.sh enrich                     # artist country/genre enrichment
+deploy/bftp-cli.sh enrich --reprocess         # re-derive from cache, no network
+deploy/bftp-cli.sh enrich-albums              # album release dates
+deploy/bftp-cli.sh spotify-liked              # import Spotify liked tracks
+deploy/bftp-cli.sh tidal-liked                # import TIDAL liked tracks
+deploy/bftp-cli.sh playlists [spotify|tidal]  # refresh playlist inventory
+```
+
+Each run prints a JSON result on stdout and progress on stderr, and exits
+non-zero on failure. Settings (Last.fm username and API key, connected
+services) are read from the database, so set them up in the web UI first.
+
+Run it as the same user that owns the database (`bftp`), or the database and
+`secret.key` will end up with the wrong ownership. Example crontab for that
+user (`sudo -u bftp crontab -e`):
+
+```
+# m h  dom mon dow  command
+15  *    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh lastfm-sync
+30  4    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh enrich
+45  4    *   *   0   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh enrich-albums
+0   5    *   *   *   flock -n /var/lock/bftp-cli.lock /opt/blastfromthepast/deploy/bftp-cli.sh spotify-liked
+```
+
+`flock -n` stops a job from starting while another cron job is still running.
+It doesn't coordinate with a job started from the web UI, so avoid triggering
+the same job by hand while cron is running it. The CLI runs under whichever
+`npm`/`node` the `PATH` resolves to, so use the same Node the systemd unit
+uses (see step 2). If cron's `PATH` differs, set `PATH=` at the top of the
+crontab.

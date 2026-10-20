@@ -37,7 +37,7 @@ import {
 } from '@bftp/core';
 import path from 'node:path';
 
-const MB_USER_AGENT =
+export const MB_USER_AGENT =
   'BlastFromThePast/0.1 ( https://github.com/dologan/blastfromthepast )';
 const SERVICES: ServiceName[] = ['spotify', 'tidal'];
 
