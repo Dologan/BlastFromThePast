@@ -412,3 +412,54 @@ can have a different `node` first on `PATH`, which fails with
 `NODE_MODULE_VERSION` errors. Set `BFTP_NODE=` in `deploy/bftp.env` to use a
 different binary. Whatever Node you pick, the service must run on the same one,
 so after changing Node, rebuild with `npm rebuild better-sqlite3`.
+
+## 10. Redeploy automatically after a pull
+
+`deploy/update.sh` rebuilds the web app and restarts the service. A git
+`post-merge` hook runs it after a pull into the live checkout, but only when
+the checked-out branch is the deploy branch (`main` by default, set with
+`BFTP_DEPLOY_BRANCH` in the environment of the pulling shell). Pulling a
+feature branch into the checkout doesn't redeploy. `git pull --rebase` doesn't
+trigger the hook, so run `deploy/update.sh` by hand after one.
+
+One-time setup, as the user who pulls the repo (`dologan` below; substitute
+yours):
+
+1. Let that user restart the service without a password. Run this as root or
+   with `sudo`, and check the file with `visudo -c`:
+
+   ```
+   echo 'dologan ALL=(root) NOPASSWD: /usr/bin/systemctl restart blastfromthepast' | sudo tee /etc/sudoers.d/bftp-restart
+   sudo chmod 0440 /etc/sudoers.d/bftp-restart
+   sudo visudo -c
+   ```
+
+   The rule covers only that one command. `sudo -n` in `update.sh` fails
+   instead of prompting, so a missing rule shows up as an error.
+
+2. Make the web build output writable by that user. `apps/web/dist` was last
+   built by root, so give the directory to the pulling user:
+
+   ```
+   sudo chown -R dologan:bftp /opt/blastfromthepast/apps/web/dist
+   ```
+
+   The service only needs to read these files, and they stay world-readable.
+
+3. Install the hook into the live checkout's `.git/hooks`:
+
+   ```
+   cd /opt/blastfromthepast && deploy/install-hooks.sh
+   ```
+
+   Re-run it after changing a file in `deploy/git-hooks/`.
+
+After that, `git pull` on the deploy branch rebuilds and restarts the service,
+and the output appears in the terminal. If the build or restart fails, the
+pull still succeeds, but the server keeps running the old build, so check
+the output after each pull.
+
+If the pulled commits change `package.json` or `package-lock.json`, the hook
+doesn't install dependencies. Run `npm install` by hand first. Run it as the
+user who owns `node_modules`, and check that `better-sqlite3` still builds for
+the service's Node (step 2 of section 9).
