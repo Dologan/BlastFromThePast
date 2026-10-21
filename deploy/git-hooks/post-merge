@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Installed as .git/hooks/post-merge by deploy/install-hooks.sh. Git runs it after
+# any merge into the checkout, including `git pull` (fast-forward or merge commit;
+# not `git pull --rebase`). It redeploys only when the checked-out branch is the
+# deploy branch, so pulling a feature branch into this checkout does nothing.
+set -eu
+
+deploy_branch="${BFTP_DEPLOY_BRANCH:-main}"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+
+if [ "$branch" != "$deploy_branch" ]; then
+  echo "[post-merge] checked-out branch is '$branch', not '$deploy_branch'; not redeploying"
+  exit 0
+fi
+
+exec "$(git rev-parse --show-toplevel)/deploy/update.sh"
