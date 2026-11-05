@@ -484,15 +484,25 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       return { error: 'existingPlaylistId is required for replace/append.' };
     }
 
-    const preview = recipes.preview(body.recipe);
-    const selected = body.selectedIds ? new Set(body.selectedIds) : null;
-    const rows = preview.rows.filter((r) => !selected || selected.has(r.entityId));
+    // An explicit selection is pushed as-is. Re-running the recipe here would
+    // resample random sorts, so the caller's own preview rows (what it picked
+    // from) would no longer match what the server computes now. Without a
+    // selection, the whole recipe result is pushed.
+    const entityIds = body.selectedIds
+      ? [...new Set(body.selectedIds.filter(Number.isInteger))]
+      : recipes.preview(body.recipe).rows.map((r) => r.entityId);
 
-    // Tracks push as-is; albums expand to their tracks (in preview order).
+    // Tracks push as-is; albums expand to their tracks (in selection order).
+    const trackById = handle.sqlite.prepare(
+      'SELECT t.id AS trackId, t.name AS name, a.name AS artistName FROM tracks t JOIN artists a ON a.id = t.artist_id WHERE t.id = ?',
+    );
     const tracks =
       body.recipe.output.mode === 'tracks'
-        ? rows.map((r) => ({ trackId: r.entityId, name: r.name, artistName: r.artistName }))
-        : rows.flatMap((r) => expandAlbumTracks(handle, r.entityId));
+        ? entityIds.flatMap((id) => {
+            const track = trackById.get(id) as { trackId: number; name: string; artistName: string } | undefined;
+            return track ? [track] : [];
+          })
+        : entityIds.flatMap((id) => expandAlbumTracks(handle, id));
     if (tracks.length === 0) return { error: 'Nothing selected to push.' };
 
     return {
