@@ -137,6 +137,48 @@ describe('push API', () => {
     await app.close();
   });
 
+  it('pushes the selected ids even when a random-sort recipe would resample a different set', async () => {
+    handle = openDb(':memory:');
+    const s = handle.sqlite;
+    const opeth = Number(s.prepare("INSERT INTO artists (name, name_normalized) VALUES ('Opeth','opeth')").run().lastInsertRowid);
+    const ids = ['Ghost A', 'Ghost B', 'Ghost C'].map((name) => {
+      const id = Number(
+        s.prepare('INSERT INTO tracks (artist_id, name, name_normalized) VALUES (?, ?, ?)').run(opeth, name, name.toLowerCase()).lastInsertRowid,
+      );
+      s.prepare('INSERT INTO scrobbles (track_id, uts) VALUES (?, ?)').run(id, NOW - YEAR);
+      return id;
+    });
+    rebuildStats(s);
+
+    const app = buildApp({
+      handle,
+      authManager: { isAuthorized: () => true } as unknown as AuthManager,
+      createConnector: () => new FakeConnector(),
+    });
+
+    // The recipe only yields 1 random track per preview, but the caller selected
+    // 3 from its own preview. The push must use the caller's selection, not
+    // whatever sample the server draws now.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/push',
+      payload: {
+        service: 'spotify',
+        name: 'Random selection',
+        recipe: { filters: [], output: { mode: 'tracks', sort: 'random', limit: 1 } },
+        selectedIds: ids,
+      },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().trackCount).toBe(3);
+    for (let i = 0; i < 50; i++) {
+      const st = await app.inject({ method: 'GET', url: '/api/sync/status' });
+      if (!st.json().running) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await app.close();
+  });
+
   it('expands an albums-mode recipe into the album tracks', async () => {
     handle = openDb(':memory:');
     const s = handle.sqlite;
