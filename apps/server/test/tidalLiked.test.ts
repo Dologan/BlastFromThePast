@@ -33,20 +33,22 @@ function recorder(responder: (url: string, method: string) => unknown): { fetchI
 const token = async () => 'AT';
 
 describe('TidalConnector.getLikedTracks / removeLikedTracks', () => {
-  it('paginates userCollectionTracks items via page[cursor], resolving track attributes from included', async () => {
-    const { fetchImpl } = recorder((url) => {
-      if (url.includes('page[cursor]=CURSOR1')) {
+  it('paginates userCollectionTracks items via page[cursor], looking the tracks up in batches of 20', async () => {
+    const pageOne = Array.from({ length: 21 }, (_, i) => `t${i}`);
+    const { fetchImpl, calls } = recorder((url) => {
+      if (url.includes('/tracks?')) {
+        // The collection returns bare ids; titles and artists come from /tracks.
+        const ids = decodeURIComponent(url.split('filter%5Bid%5D=')[1]!.split('&')[0]!).split(',');
         return {
-          data: [{ id: 't2', type: 'tracks', meta: { addedAt: '2021-06-01T00:00:00Z' } }],
-          included: [{ type: 'tracks', id: 't2', attributes: { title: 'One', isrc: 'X2' }, relationships: { artists: { data: [{ id: 'a2' }] } } }, { type: 'artists', id: 'a2', attributes: { name: 'Metallica' } }],
+          data: ids.map((id) => ({ type: 'tracks', id, attributes: { title: `Song ${id}`, isrc: `X${id}` }, relationships: { artists: { data: [{ id: 'a1' }] } } })),
+          included: [{ type: 'artists', id: 'a1', attributes: { name: 'Opeth' } }],
         };
       }
+      if (url.includes('page[cursor]=CURSOR1')) {
+        return { data: [{ id: 'last', type: 'tracks', meta: { addedAt: '2021-06-01T00:00:00Z' } }] };
+      }
       return {
-        data: [{ id: 't1', type: 'tracks', meta: { addedAt: '2020-01-01T00:00:00Z' } }],
-        included: [
-          { type: 'tracks', id: 't1', attributes: { title: 'Ghost of Perdition', isrc: 'X1' }, relationships: { artists: { data: [{ id: 'a1' }] } } },
-          { type: 'artists', id: 'a1', attributes: { name: 'Opeth' } },
-        ],
+        data: pageOne.map((id) => ({ id, type: 'tracks', meta: { addedAt: '2020-01-01T00:00:00Z' } })),
         links: { meta: { nextCursor: 'CURSOR1' } },
       };
     });
@@ -55,10 +57,10 @@ describe('TidalConnector.getLikedTracks / removeLikedTracks', () => {
     for await (const { track, likedAt } of c.getLikedTracks!()) {
       seen.push({ serviceId: track.serviceId, name: track.name, artistName: track.artistName, likedAt });
     }
-    expect(seen).toEqual([
-      { serviceId: 't1', name: 'Ghost of Perdition', artistName: 'Opeth', likedAt: Math.floor(Date.parse('2020-01-01T00:00:00Z') / 1000) },
-      { serviceId: 't2', name: 'One', artistName: 'Metallica', likedAt: Math.floor(Date.parse('2021-06-01T00:00:00Z') / 1000) },
-    ]);
+    expect(seen).toHaveLength(22);
+    expect(seen[0]).toEqual({ serviceId: 't0', name: 'Song t0', artistName: 'Opeth', likedAt: Math.floor(Date.parse('2020-01-01T00:00:00Z') / 1000) });
+    expect(seen[21]).toEqual({ serviceId: 'last', name: 'Song last', artistName: 'Opeth', likedAt: Math.floor(Date.parse('2021-06-01T00:00:00Z') / 1000) });
+    expect(calls.filter((call) => call.url.includes('/tracks?')).map((call) => call.url.split('filter%5Bid%5D=')[1]!.split('&')[0]!.split(',').length)).toEqual([20, 1, 1]);
   });
 
   it('removeLikedTracks batches DELETEs and sends an Idempotency-Key header per batch', async () => {

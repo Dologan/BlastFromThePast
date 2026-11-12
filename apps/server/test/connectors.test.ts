@@ -282,31 +282,33 @@ describe('TidalConnector', () => {
     expect(c.deepLinkArtist('a1')).toBe('https://tidal.com/browse/artist/a1');
   });
 
-  it('searches via the paginated /relationships/tracks endpoint, not the unpaginated base endpoint', async () => {
+  it('searches with filter[query], then pages through the opaque searchResults id', async () => {
     const { fetchImpl, calls } = recorder((url) => {
       if (url.includes('page[cursor]=CURSOR1')) {
         return { included: [{ type: 'tracks', id: 't2', attributes: { title: 'Second Page Match' } }] };
       }
       return {
-        included: [{ type: 'tracks', id: 't1', attributes: { title: 'First Page' } }],
-        links: { meta: { nextCursor: 'CURSOR1' } },
+        data: [{ id: 'OPAQUE', type: 'searchResults', relationships: { tracks: { links: { meta: { nextCursor: 'CURSOR1' } } } } }],
+        included: [{ type: 'tracks', id: 't1', attributes: { title: 'First Page', duration: 'PT4M41S' } }],
       };
     });
     const c = new TidalConnector(token, () => true, 'US', fetchImpl);
     const res = await c.searchTrack({ artistName: 'At the Gates', trackName: 'World of Lies' });
-    expect(calls[0]!.url).toContain('/relationships/tracks');
-    expect(calls[0]!.url).not.toMatch(/searchResults\/[^/]+\?/); // not the base endpoint
+    // TIDAL rejects the query text as a searchResults id (HTTP 400 INVALID_RESOURCE_ID).
+    expect(calls[0]!.url).toContain('/searchResults?filter%5Bquery%5D=At%20the%20Gates%20World%20of%20Lies&include=tracks');
+    expect(calls[1]!.url).toContain('/searchResults/OPAQUE/relationships/tracks?include=tracks&page[cursor]=CURSOR1');
     // Both pages' results are considered as candidates, not just the first.
     expect(res.map((t) => t.serviceId)).toEqual(['t1', 't2']);
+    expect(res[0]!.durationMs).toBe(281000);
   });
 
   it('stops paginating search results after SEARCH_MAX_PAGES even if more pages exist', async () => {
     const { fetchImpl, calls } = recorder((url) => {
-      const cursor = url.includes('page[cursor]=') ? url.split('page[cursor]=')[1] : '0';
-      return {
-        included: [{ type: 'tracks', id: `t${cursor}`, attributes: { title: 'X' } }],
-        links: { meta: { nextCursor: String(Number(cursor) + 1) } }, // always another page available
-      };
+      const cursor = url.includes('page[cursor]=') ? url.split('page[cursor]=')[1]!.split('&')[0]! : '0';
+      const next = { nextCursor: String(Number(cursor) + 1) }; // always another page available
+      return url.includes('filter%5Bquery%5D')
+        ? { data: [{ id: 'S', type: 'searchResults', relationships: { tracks: { links: { meta: next } } } }], included: [] }
+        : { included: [{ type: 'tracks', id: `t${cursor}`, attributes: { title: 'X' } }], links: { meta: next } };
     });
     const c = new TidalConnector(token, () => true, 'US', fetchImpl);
     await c.searchTrack({ artistName: 'A', trackName: 'B' });

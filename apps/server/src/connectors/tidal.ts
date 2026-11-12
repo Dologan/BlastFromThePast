@@ -10,6 +10,7 @@ const PLAYLIST_ITEMS_BATCH_SIZE = 20; // Same conservative default for playlist 
 // fetchWithRetry additionally backs off on any 429 that still gets through.
 const MIN_REQUEST_INTERVAL_MS = 350;
 const SEARCH_MAX_PAGES = 3; // candidates to consider per search, across pages
+const TRACK_LOOKUP_BATCH_SIZE = 20; // `/tracks?filter[id]=` accepts at most 20 ids
 
 const API = SERVICE_CONFIG.tidal.apiBase;
 const JSON_API = 'application/vnd.api+json';
@@ -37,6 +38,16 @@ function includedTrack(id: string, included: any[]): { name?: string; artistName
     artistName: artistRef ? artistsById.get(artistRef) : undefined,
     isrc: track.attributes?.isrc,
   };
+}
+
+/** TIDAL durations are ISO 8601 (`PT4M41S`); older responses used plain seconds. */
+export function durationMs(duration: unknown): number | undefined {
+  if (typeof duration === 'number') return duration * 1000;
+  if (typeof duration !== 'string') return undefined;
+  if (/^\d+(\.\d+)?$/.test(duration)) return Number(duration) * 1000;
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/.exec(duration);
+  if (!m) return undefined;
+  return Math.round(((Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 60 + Number(m[3] ?? 0)) * 1000);
 }
 
 export class TidalConnector implements ServiceConnector {
@@ -94,22 +105,24 @@ export class TidalConnector implements ServiceConnector {
 
   /**
    * Collects `included` resources of `relType` for a search query across up
-   * to `SEARCH_MAX_PAGES` pages of the paginated relationship endpoint
-   * (`/searchResults/{id}/relationships/{relType}`), rather than the base
-   * `/searchResults/{id}?include=...` endpoint -- which returns a small,
-   * undocumented, unpaginated batch and can miss an exact match that's just
-   * not in that first handful of results.
+   * to `SEARCH_MAX_PAGES` pages. TIDAL takes the query as
+   * `/searchResults?filter[query]=...` and answers with an opaque
+   * searchResults id (it no longer accepts the query text as the id); later
+   * pages come from `/searchResults/{opaqueId}/relationships/{relType}`.
    */
   private async searchRelated(term: string, relType: 'tracks' | 'albums' | 'artists'): Promise<any[]> {
-    const out: any[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < SEARCH_MAX_PAGES; page++) {
-      const path = `/searchResults/${encodeURIComponent(term)}/relationships/${relType}?include=${relType}${cursor ? `&page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
+    const first = await this.request(
+      'GET',
+      `/searchResults?filter%5Bquery%5D=${encodeURIComponent(term)}&include=${relType}`,
+    );
+    const out: any[] = [...((first?.included ?? []) as any[])];
+    const result = Array.isArray(first?.data) ? first.data[0] : first?.data;
+    let cursor: string | undefined = result?.relationships?.[relType]?.links?.meta?.nextCursor;
+    for (let page = 1; page < SEARCH_MAX_PAGES && cursor && result?.id; page++) {
+      const path = `/searchResults/${encodeURIComponent(result.id)}/relationships/${relType}?include=${relType}&page[cursor]=${encodeURIComponent(cursor)}`;
       const data = await this.request('GET', path);
       out.push(...((data?.included ?? []) as any[]));
-      const next = data?.links?.meta?.nextCursor;
-      if (!next) break;
-      cursor = next;
+      cursor = data?.links?.meta?.nextCursor;
     }
     return out;
   }
@@ -130,7 +143,7 @@ export class TidalConnector implements ServiceConnector {
           name: r.attributes?.title ?? '',
           artistName: (artistRef && artistsById.get(artistRef)) || query.artistName,
           isrc: r.attributes?.isrc,
-          durationMs: r.attributes?.duration ? Number(r.attributes.duration) * 1000 : undefined,
+          durationMs: durationMs(r.attributes?.duration),
         } satisfies ServiceTrack;
       });
   }
@@ -248,11 +261,17 @@ export class TidalConnector implements ServiceConnector {
   async *getLikedTracks(): AsyncIterable<{ track: ServiceTrack; likedAt?: number }> {
     let cursor: string | undefined;
     for (let page = 0; page < 500; page++) {
-      const path = `/userCollectionTracks/me/relationships/items?include=items${cursor ? `&page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
+      const path = `/userCollectionTracks/me/relationships/items${cursor ? `?page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
       const data = await this.request('GET', path);
-      const included: any[] = data?.included ?? [];
-      for (const item of data?.data ?? []) {
-        if (!item?.id) continue;
+      const items = ((data?.data ?? []) as any[]).filter((item) => item?.id);
+      // The collection only returns ids, even with include=items, so look the
+      // tracks (and their artists) up in batches.
+      const included: any[] = [];
+      for (const batch of chunk(items.map((item) => String(item.id)), TRACK_LOOKUP_BATCH_SIZE)) {
+        const tracks = await this.request('GET', `/tracks?filter%5Bid%5D=${batch.map(encodeURIComponent).join(',')}&include=artists`);
+        included.push(...((tracks?.data ?? []) as any[]), ...((tracks?.included ?? []) as any[]));
+      }
+      for (const item of items) {
         const info = includedTrack(String(item.id), included);
         const likedAt = item.meta?.addedAt ? Math.floor(Date.parse(item.meta.addedAt) / 1000) : undefined;
         yield {
