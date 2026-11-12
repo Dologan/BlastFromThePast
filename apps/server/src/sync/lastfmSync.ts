@@ -5,6 +5,28 @@ import { rebuildStats } from './stats.js';
 
 const SCROBBLES_SOURCE = 'lastfm:scrobbles';
 const LOVED_SOURCE = 'lastfm:loved';
+// A run of at least this many loves, each within BULK_LOVE_GAP_SECONDS of the
+// previous one, is a bulk import (e.g. loves copied over from a streaming
+// service): its timestamps say when the import ran, not when you liked them.
+const BULK_LOVE_MIN_RUN = 50;
+const BULK_LOVE_GAP_SECONDS = 60;
+
+/**
+ * Returns the love timestamps that belong to a bulk import, so they can be
+ * stored as undated. Recipes then fall back to the track's first play.
+ */
+export function bulkLoveTimestamps(timestamps: (number | undefined)[]): Set<number> {
+  const sorted = [...new Set(timestamps.filter((t): t is number => t !== undefined))].sort((a, b) => a - b);
+  const bulk = new Set<number>();
+  let start = 0;
+  for (let i = 1; i <= sorted.length; i++) {
+    if (i < sorted.length && sorted[i]! - sorted[i - 1]! <= BULK_LOVE_GAP_SECONDS) continue;
+    const run = timestamps.filter((t) => t !== undefined && t >= sorted[start]! && t <= sorted[i - 1]!).length;
+    if (run >= BULK_LOVE_MIN_RUN) for (let j = start; j < i; j++) bulk.add(sorted[j]!);
+    start = i;
+  }
+  return bulk;
+}
 
 /**
  * Checkpoint for scrobble syncing. A sync run works through a fixed window
@@ -172,7 +194,8 @@ export class LastfmSync {
         const ins = this.handle.sqlite.prepare(
           "INSERT OR IGNORE INTO liked_tracks (track_id, source, liked_at) VALUES (?, 'lastfm', ?)",
         );
-        for (const e of entries) ins.run(e.trackId, e.uts ?? null);
+        const bulk = bulkLoveTimestamps(entries.map((e) => e.uts));
+        for (const e of entries) ins.run(e.trackId, e.uts === undefined || bulk.has(e.uts) ? null : e.uts);
       });
       replace();
       this.writeState(LOVED_SOURCE, {}, 'idle');

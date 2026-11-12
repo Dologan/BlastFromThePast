@@ -191,4 +191,14 @@ describe('LastfmSync', () => {
       .all() as { name: string }[];
     expect(rows.map((r) => r.name)).toEqual(['Evidence', 'Nowhere']);
   });
+
+  it('stores bulk-imported loves as undated, keeping individually dated ones', async () => {
+    client.loved = [
+      ...Array.from({ length: 60 }, (_, i) => ({ artist: 'Bulk', track: `Song ${i}`, uts: T0 + Math.floor(i / 3) })),
+      { artist: 'Opeth', track: 'Windowpane', uts: T0 + DAY },
+    ];
+    await makeSync(T0 + 2 * DAY).run();
+    expect(count("SELECT COUNT(*) c FROM liked_tracks WHERE source = 'lastfm' AND liked_at IS NULL")).toBe(60);
+    expect(count(`SELECT COUNT(*) c FROM liked_tracks WHERE source = 'lastfm' AND liked_at = ${T0 + DAY}`)).toBe(1);
+  });
 });
