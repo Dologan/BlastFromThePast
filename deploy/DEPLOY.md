@@ -437,14 +437,19 @@ yours):
    The rule covers only that one command. `sudo -n` in `update.sh` fails
    instead of prompting, so a missing rule shows up as an error.
 
-2. Make the web build output writable by that user. `apps/web/dist` was last
-   built by root, so give the directory to the pulling user:
+2. Make everything the web build writes belong to that user. That is the
+   build output and the temp directory vite uses to load its config:
 
    ```
-   sudo chown -R dologan:bftp /opt/blastfromthepast/apps/web/dist
+   sudo mkdir -p /opt/blastfromthepast/node_modules/.vite-temp
+   sudo chown -R dologan:bftp /opt/blastfromthepast/apps/web/dist /opt/blastfromthepast/node_modules/.vite-temp
    ```
 
    The service only needs to read these files, and they stay world-readable.
+   Always build as this same user. A build run as another user (for example
+   `sudo -u bftp npm run build`) hands those directories back to that user, and
+   the next hook run fails with `EACCES`. `update.sh` checks for this and stops
+   before building, with a message.
 
 3. Install the hook into the live checkout's `.git/hooks`:
 
