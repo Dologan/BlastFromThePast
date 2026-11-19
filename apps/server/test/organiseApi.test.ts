@@ -18,8 +18,13 @@ class FakeConnector implements ServiceConnector {
   findOrCreateFolder?: (name: string) => Promise<string>;
   addPlaylistsToFolder?: (folderId: string, playlistIds: string[]) => Promise<void>;
 
-  constructor(readonly service: ServiceName) {
-    if (service === 'tidal') {
+  /** `withFolders` stands in for a service with a folders API -- neither Spotify nor
+   * TIDAL (whose folder endpoints are internal-only) offers one to this app today. */
+  constructor(
+    readonly service: ServiceName,
+    withFolders = false,
+  ) {
+    if (withFolders) {
       this.findOrCreateFolder = async (name) => {
         if (!this.folderIds.has(name)) {
           this.foldersCreated.push(name);
@@ -99,7 +104,8 @@ describe('Organiser API', () => {
     seed(handle, 'Coltrane', 'Giant Steps', 'jazz', at(2019, 6), at(2024, 1));
     seed(handle, 'Bill Evans', 'Peace Piece', 'jazz', at(2024, 1, 10), null);
     rebuildStats(handle.sqlite);
-    const connectors = { tidal: new FakeConnector('tidal'), spotify: new FakeConnector('spotify') };
+    // The 'tidal' slot gets the folder-capable fake, to exercise the folder path.
+    const connectors = { tidal: new FakeConnector('tidal', true), spotify: new FakeConnector('spotify') };
     const app = buildApp({
       handle,
       authManager: { isAuthorized: () => true } as unknown as AuthManager,
@@ -143,7 +149,7 @@ describe('Organiser API', () => {
     await app.close();
   });
 
-  it('pushes to TIDAL, filing each playlist in its year folder and logging the folder', async () => {
+  it('on a service with folders, files each playlist in its year folder and logs the folder', async () => {
     const { app, connectors } = setup();
     const res = await app.inject({ method: 'POST', url: '/api/organise/push/sync', payload: { plan: PLAN, service: 'tidal' } });
     expect(res.statusCode).toBe(200);
@@ -184,13 +190,18 @@ describe('Organiser API', () => {
     await app.close();
   });
 
-  it('prefixes the folder to the playlist name on Spotify, which has no folders', async () => {
+  it('without folders, keeps names that already contain the folder and prefixes the rest', async () => {
     const { app, connectors } = setup();
     const preview = await app.inject({ method: 'POST', url: '/api/organise/preview', payload: { plan: PLAN, service: 'spotify' } });
     expect(preview.json().foldersSupported).toBe(false);
+    expect(preview.json().folders[0].playlists[0].pushName).toBe('2024-01 Jazz');
     await app.inject({ method: 'POST', url: '/api/organise/push/sync', payload: { plan: PLAN, service: 'spotify' } });
-    expect(connectors.spotify.created).toEqual(['2024 · 2024-01 Jazz', '2025 · 2025-03 Metal', '2025 · 2025-03 Other']);
+    expect(connectors.spotify.created).toEqual(['2024-01 Jazz', '2025-03 Metal', '2025-03 Other']);
     expect(handle.sqlite.prepare('SELECT COUNT(*) AS n FROM playlist_log WHERE folder IS NULL').get()).toEqual({ n: 3 });
+
+    const monthNames = { ...PLAN, name: '{monthName} {genre}' };
+    await app.inject({ method: 'POST', url: '/api/organise/push/sync', payload: { plan: monthNames, service: 'spotify' } });
+    expect(connectors.spotify.created.slice(3)).toEqual(['2024 · January Jazz', '2025 · March Metal', '2025 · March Other']);
     await app.close();
   });
 

@@ -21,7 +21,7 @@ Voice (Android Auto / Wear OS / phone)
 |---|---|---|
 | Sync push endpoint | `POST /api/push/sync` | Same body as `/api/push`, but waits and returns the playlist URL + match stats in one round-trip (agents hate polling). Returns `{pending:true}` after ~90 s if the push is still running. |
 | Bearer-token guard | `BFTP_API_TOKEN` env or `api.token` setting | Optional. When set, non-loopback requests to `/api/*` need `Authorization: Bearer <token>`. Loopback (the web UI) is always exempt; nothing is enforced if unset. |
-| MCP server | `npm run mcp` | stdio MCP server exposing `get_context`, `preview_playlist`, `check_existing_playlist`, `create_playlist`, plus `preview_organisation` / `create_organisation` for splitting tracks into many playlists (by month/year liked and genre, in folders on TIDAL). A thin proxy over the HTTP API — configure with `BFTP_API_URL` (default `http://127.0.0.1:8765`) and optional `BFTP_API_TOKEN`. |
+| MCP server | `npm run mcp` | stdio MCP server exposing `get_context`, `preview_playlist`, `check_existing_playlist`, `create_playlist`, plus `preview_organisation` / `create_organisation` for splitting tracks into many playlists (by month/year liked and genre, named per folder). A thin proxy over the HTTP API — configure with `BFTP_API_URL` (default `http://127.0.0.1:8765`) and optional `BFTP_API_TOKEN`. |
 | OpenClaw skill | `skills/blastfromthepast/SKILL.md` | Teaches an OpenClaw agent the recipe grammar, the preview→confirm→create workflow, and the curl fallback. |
 
 ## OpenClaw setup

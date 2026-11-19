@@ -11,7 +11,6 @@ const PLAYLIST_ITEMS_BATCH_SIZE = 20; // Same conservative default for playlist 
 const MIN_REQUEST_INTERVAL_MS = 350;
 const SEARCH_MAX_PAGES = 3; // candidates to consider per search, across pages
 const TRACK_LOOKUP_BATCH_SIZE = 20; // `/tracks?filter[id]=` accepts at most 20 ids
-const FOLDER_ITEMS_BATCH_SIZE = 10; // userCollectionFolders items accept at most 10 per call
 
 const API = SERVICE_CONFIG.tidal.apiBase;
 const JSON_API = 'application/vnd.api+json';
@@ -28,10 +27,10 @@ const JSON_API = 'application/vnd.api+json';
  * `userCollectionPlaylists` resource by analogy -- its exact response/`include`
  * shape was not directly confirmed, so treat it as needing a live check too.
  *
- * Playlist folders use `userCollectionFolders`, which live in the
- * `userCollectionPlaylists` collection and hold playlists only (they don't
- * nest). The create and add-items payloads follow the OpenAPI spec but haven't
- * been exercised against a live account yet.
+ * There's no folder support: TIDAL's playlist-folder endpoints
+ * (`userCollectionFolders`, `folders`, `folderItems`) require the INTERNAL
+ * access tier, i.e. TIDAL's own apps, and answer a third-party app with 403
+ * "Access tier is insufficient".
  */
 function includedTrack(id: string, included: any[]): { name?: string; artistName?: string; isrc?: string } {
   const artistsById = new Map<string, string>();
@@ -331,60 +330,6 @@ export class TidalConnector implements ServiceConnector {
       cursor = next;
     }
     return out;
-  }
-
-  /** The user's playlist folders, from the collection's FOLDERS view. */
-  async listFolders(): Promise<{ serviceId: string; name: string }[]> {
-    const out: { serviceId: string; name: string }[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 100; page++) {
-      const path = `/userCollectionPlaylists/me/relationships/items?collectionView=FOLDERS&include=items${cursor ? `&page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
-      const data = await this.request('GET', path);
-      const included: any[] = data?.included ?? [];
-      for (const item of data?.data ?? []) {
-        if (item?.type !== 'userCollectionFolders' || !item.id) continue;
-        const folder = included.find((r) => r?.type === 'userCollectionFolders' && r.id === item.id);
-        out.push({ serviceId: String(item.id), name: folder?.attributes?.name ?? '' });
-      }
-      const next = data?.links?.meta?.nextCursor;
-      if (!next) break;
-      cursor = next;
-    }
-    return out;
-  }
-
-  /** Looks the folder up by name every time rather than caching its id, so a
-   * folder the user renamed or deleted in the app is never written to. */
-  async findOrCreateFolder(name: string): Promise<string> {
-    const existing = (await this.listFolders()).find((f) => f.name === name);
-    if (existing) return existing.serviceId;
-    const data = await this.request(
-      'POST',
-      '/userCollectionFolders',
-      {
-        data: {
-          type: 'userCollectionFolders',
-          attributes: { name },
-          relationships: { userCollection: { data: { id: 'me', type: 'userCollectionPlaylists' } } },
-        },
-      },
-      { 'Idempotency-Key': randomUUID() },
-    );
-    const id = data?.data?.id;
-    if (!id) throw new ConnectorError(`TIDAL didn't return an id for new folder "${name}".`);
-    return String(id);
-  }
-
-  async addPlaylistsToFolder(folderId: string, playlistIds: string[]): Promise<void> {
-    for (const batch of chunk(playlistIds, FOLDER_ITEMS_BATCH_SIZE)) {
-      if (batch.length === 0) continue;
-      await this.request(
-        'POST',
-        `/userCollectionFolders/${encodeURIComponent(folderId)}/relationships/items`,
-        { data: batch.map((id) => ({ id, type: 'playlists' })) },
-        { 'Idempotency-Key': randomUUID() },
-      );
-    }
   }
 
   async getPlaylistItems(

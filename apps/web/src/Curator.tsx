@@ -618,6 +618,7 @@ function Organise({ settings, auth }: { settings: Settings; auth: AuthStatus | n
     setPushResults(null);
     setJobStatus(null);
     try {
+      // Send the plain name and folder: the server applies the service's naming (pushName) itself.
       await api.curatePush(
         service,
         onExisting,
@@ -640,8 +641,9 @@ function Organise({ settings, auth }: { settings: Settings; auth: AuthStatus | n
       <h2>Organise into playlists</h2>
       <p className="hint">
         Split your loves into many playlists by when you liked them and their genre, filed in folders — e.g. one
-        playlist per month and genre, in a folder per year. Folders are created on TIDAL; Spotify has none, so the
-        folder name is put in front of the playlist name instead.
+        playlist per month and genre, grouped by year. Spotify and TIDAL don't let this app create folders, so the
+        folder is part of each playlist's name instead (put in front unless the name already contains it); you can
+        file them into folders by hand in the app.
       </p>
       <label>
         Liked in the last (0 = any time)
@@ -704,7 +706,7 @@ function Organise({ settings, auth }: { settings: Settings; auth: AuthStatus | n
             {preview.folders.some((f) => f.name) && ` across ${preview.folders.length} folders`}.
             {preview.likeDateFallback > 0 &&
               ` ${preview.likeDateFallback.toLocaleString()} have no like date (e.g. bulk-imported loves) and are placed by first play.`}
-            {preview.foldersSupported === false && templates.folder && ' On Spotify, folder names prefix the playlist names.'}
+
           </p>
           <div className="curate-groups">
             {preview.folders.map((f) => (
@@ -720,7 +722,7 @@ function Organise({ settings, auth }: { settings: Settings; auth: AuthStatus | n
                     <li key={playlistId(p)} title={p.sample.join('\n')}>
                       <label className="inline">
                         <input type="checkbox" checked={!deselected.has(playlistId(p))} onChange={() => toggle(playlistId(p))} />
-                        {p.name} <span className="hint">({p.count})</span>
+                        {p.pushName ?? p.name} <span className="hint">({p.count})</span>
                       </label>
                       {p.existing && <span className="badge on">exists already</span>}
                     </li>

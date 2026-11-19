@@ -146,8 +146,9 @@ export const ORGANISE_JSON_SCHEMA = {
     folder: {
       type: 'string',
       description:
-        'Folder name template, e.g. "{year}". Omit for no folders. TIDAL supports folders; on Spotify ' +
-        'the folder name is prefixed to the playlist name instead.',
+        'Folder name template, e.g. "{year}". Omit for no folders. Neither Spotify nor TIDAL lets this app create ' +
+        'folders, so on the service the folder becomes part of the name: kept as is when the name already contains it, ' +
+        'else prefixed ("2025 · March Metal").',
     },
     name: {
       type: 'string',

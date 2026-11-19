@@ -101,11 +101,11 @@ optional `perArtistCap` (2–3 keeps playlists varied).
 
 When the user wants their music split into **several** playlists — per month, per year, per genre, in
 folders (*"organise my loves of the last couple of years into per-month, per-genre playlists in a folder
-per year"*) — use an **organisation plan** instead of one recipe. With MCP use `preview_organisation` /
+per year"*) — use an **organisation plan** instead of one recipe. (Folders are a naming scheme for now: see notes.) With MCP use `preview_organisation` /
 `create_organisation`; otherwise:
 
 1. **Preview:** `curl -s -X POST $BASE/api/organise/preview -H 'Content-Type: application/json' -d '{"plan": <plan>, "service": "<svc>"}'`
-   → `{trackCount, playlistCount, likeDateFallback, folders: [{name, playlists: [{name, count, sample, existing}]}]}`.
+   → `{trackCount, playlistCount, likeDateFallback, folders: [{name, playlists: [{name, pushName, count, sample, existing}]}]}`.
    Tell the user the totals and 2–3 example playlists ("58 playlists in 3 folders, e.g. 2025 / 2025-02 Electronic
    (8 tracks) — create them?"). If many playlists have only a few tracks, suggest a larger `minGroupSize` or
    coarser grouping (`likedYear`, or genre only) and preview again.
@@ -127,14 +127,16 @@ Plan grammar — the worked example for the request above:
 |---|---|
 | `base` | Any recipe (grammar above) selecting the tracks. Its `limit` is ignored: every match is organised. |
 | `groupBy` | One or two of: `likedMonth`, `likedYear` (when liked — latest like on any service; undated likes count as the first play), `firstListenMonth`, `firstListenYear`, and `genreFamily` (broad: metal, rock, pop…) or `canonicalGenre` (finer). At most one time and one genre dimension. |
-| `folder` | Folder name template, e.g. `"{year}"`. Omit for no folders. |
+| `folder` | Folder name template, e.g. `"{year}"`. Omit for no folders. Groups the preview; on the service it's part of the name (see notes). |
 | `name` | Playlist name template. Variables: `{year}`, `{month}` (01–12), `{monthName}`, `{genre}`. Folder + name must mention every grouped dimension. |
 | `minGroupSize` | Genre groups smaller than this (Unclassified too) merge into that period's "Other" playlist. Default 5. |
 | `excludePlaylistedOn` | `["tidal"]` etc.: skip tracks already in one of the user's playlists there. Don't use it when re-running a plan — the organised playlists themselves would count. |
 
 Notes:
-- **Folders exist on TIDAL only.** On Spotify the folder name is prefixed instead ("2025 · 2025-03 Metal");
-  say so when the user asked for folders on Spotify.
+- **No real folders yet.** Neither Spotify nor TIDAL lets third-party apps create playlist folders (TIDAL keeps
+  its folder API for its own apps), so `folder` only shapes names: a playlist whose name already contains the folder
+  ("2025-03 Metal" in "2025") keeps its name, others get it prefixed ("2025 · March Metal"). Preview `pushName` shows
+  the final names. When the user asks for folders, say they can be made by hand in the TIDAL app afterwards.
 - **Re-running a plan** (e.g. next month) replaces the playlists it created before, with the same name and folder,
   by default. Pass `"onExisting": "skip"` to leave those alone, or `"append"` to only add new tracks. If the preview
   shows `existing: true` playlists and the user didn't say, ask which they want.

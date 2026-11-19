@@ -167,13 +167,16 @@ group, with the usual skip/replace/append handling for name clashes.
 **Organise into playlists**: splits your loves into many playlists at once —
 by the month or year you liked them (or first played them), by genre, or
 both — optionally filed in folders, e.g. one playlist per month and genre in
-a folder per year (`2025 / 2025-03 Metal`). Folder and playlist names are
+a year (`2025 / 2025-03 Metal`). Folder and playlist names are
 templates using `{year}`, `{month}`, `{monthName}` and `{genre}`; genre groups
 below the minimum size merge into that period's "Other". A like's date is the
 latest like on any service; likes with no date (such as bulk-imported Last.fm
 loves) count as the track's first play, and the preview says how many tracks
-were placed that way. Folders are created on TIDAL; Spotify's API has no
-folders, so there the folder name is put in front of the playlist name.
+were placed that way. Folders only shape names for now: neither Spotify nor
+TIDAL lets a third-party app create playlist folders (TIDAL's folder API is
+for its own apps), so a playlist whose name already contains its folder
+(`2025-03 Metal`) keeps it, and others get it prefixed (`2025 · March
+Metal`); you can file them into folders by hand in the app.
 Re-running the same grouping replaces the playlists it made before (matched
 by name and folder) by default, so it can be refreshed each month. The same
 plans are available to assistants via `POST /api/organise/preview` and

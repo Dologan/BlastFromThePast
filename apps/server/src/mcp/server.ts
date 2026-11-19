@@ -127,7 +127,7 @@ export const TOOLS = [
     name: 'create_organisation',
     description:
       'Create every playlist in an organisation plan (same plan as preview_organisation) on the streaming service, filing ' +
-      'them in folders on TIDAL (Spotify has no folders: the folder name is prefixed to the playlist name). Preview and get ' +
+      'them by folder in their names (neither Spotify nor TIDAL lets this app create real folders). Preview and get ' +
       "confirmation first. onExisting: 'replace' (default) refreshes playlists this app already created with the same name " +
       "and folder; 'skip' leaves them alone; 'append' adds only new tracks.",
     inputSchema: {
@@ -245,11 +245,13 @@ export async function callTool(cfg: McpConfig, name: string, args: any): Promise
         playlists: data.playlistCount,
         excludedAlreadyPlaylisted: data.excluded,
         ...(data.likeDateFallback ? { datedByFirstPlay: data.likeDateFallback } : {}),
-        ...(data.foldersSupported === false ? { note: `${service} has no folders: folder names will prefix playlist names.` } : {}),
+        ...(data.foldersSupported === false && data.folders.some((f: any) => f.name)
+          ? { note: `${service} doesn't let this app create folders: the playlists get the names shown, and can be put in folders by hand in the app.` }
+          : {}),
         folders: data.folders.map((f: any) => ({
           folder: f.name,
           playlists: f.playlists.map((p: any) => ({
-            name: p.name,
+            name: p.pushName ?? p.name,
             tracks: p.count,
             sample: p.sample.slice(0, 3),
             ...(p.existing ? { alreadyExists: true } : {}),

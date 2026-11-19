@@ -342,6 +342,8 @@ export interface OrganisePlaylist {
   count: number;
   trackIds: number[];
   sample: string[];
+  /** The playlist's name on the previewed service (carries the folder where it has none). */
+  pushName?: string;
   existing?: boolean;
 }
 

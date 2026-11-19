@@ -23,7 +23,7 @@ const UNDATED_KEY = '__undated__';
 const DEFAULT_MIN_GROUP_SIZE = 5;
 const DEFAULT_NAME_PREFIX = 'Loved: ';
 const SQL_ID_BATCH = 5000;
-/** Joins a folder onto a playlist name on services without folders (Spotify). */
+/** Joins a folder onto a playlist name on services without a folders API. */
 const FOLDER_PREFIX_SEPARATOR = ' · ';
 
 function capitalize(s: string): string {
@@ -66,7 +66,10 @@ export interface OrganisePlaylist {
   count: number;
   trackIds: number[];
   sample: string[];
-  /** Set when previewing for a service: this app already pushed a playlist with this name and folder there. */
+  /** Set when previewing for a service: the name it will get there, which carries the
+   * folder on services without folders (e.g. '2024 · March Metal'). */
+  pushName?: string;
+  /** Set when previewing for a service: this app already pushed this playlist there. */
   existing?: boolean;
 }
 
@@ -195,8 +198,8 @@ export class CurateService {
    * Groups a plan's tracks into a folder -> playlist tree. Every matched track
    * lands in exactly one playlist. Genre groups smaller than minGroupSize --
    * "Unclassified" (artists without genre tags) included -- fold into "Other"
-   * within their own time period. Pass `service` to flag playlists this app
-   * already pushed there.
+   * within their own time period. Pass `target` to get each playlist's name on
+   * that service and flag the ones this app already pushed there.
    *
    * Tracks this app already pushed stay in: re-running a plan regroups
    * everything, so a 'replace' refreshes each playlist rather than emptying it
@@ -207,7 +210,7 @@ export class CurateService {
   organise(
     recipes: RecipeService,
     plan: OrganisePlan,
-    service?: ServiceName,
+    target?: { service: ServiceName; foldersSupported: boolean },
     { curatorRules = false }: { curatorRules?: boolean } = {},
   ): OrganisePreviewResult {
     const minGroupSize = plan.minGroupSize ?? DEFAULT_MIN_GROUP_SIZE;
@@ -328,12 +331,12 @@ export class CurateService {
     }
 
     const tree: OrganiseFolder[] = [...folders].map(([name, playlists]) => ({ name, playlists: [...playlists.values()] }));
-    if (service) {
-      const foldersSupported = this.serviceHasFolders(service);
+    if (target) {
       for (const f of tree) {
         for (const p of f.playlists) {
-          const target = this.pushTarget(p.name, p.folder, foldersSupported);
-          p.existing = findExistingPlaylist(this.handle, service, target.name, target.folder) !== null;
+          const dest = this.pushTarget(p.name, p.folder, target.foldersSupported);
+          p.pushName = dest.name;
+          p.existing = findExistingPlaylist(this.handle, target.service, dest.name, dest.folder) !== null;
         }
       }
     }
@@ -364,15 +367,16 @@ export class CurateService {
     return { totalMatched: result.totalMatched, excluded: result.excluded, groups };
   }
 
-  /** Spotify has no folders API; there's nothing to look up, so this is decided per service. */
-  private serviceHasFolders(service: ServiceName): boolean {
-    return service === 'tidal';
-  }
-
-  /** Where a playlist actually goes: in its folder, or with the folder prefixed to its name. */
+  /**
+   * Where a playlist actually goes: in its folder, or, on a service without
+   * folders, with the folder prefixed to its name -- unless the name already
+   * contains it ('2025-03 Metal' in folder '2025'), which keeps names unique
+   * without repeating the year.
+   */
   private pushTarget(name: string, folder: string | null | undefined, foldersSupported: boolean): { name: string; folder: string | null } {
     if (!folder) return { name, folder: null };
-    return foldersSupported ? { name, folder } : { name: `${folder}${FOLDER_PREFIX_SEPARATOR}${name}`, folder: null };
+    if (foldersSupported) return { name, folder };
+    return { name: name.includes(folder) ? name : `${folder}${FOLDER_PREFIX_SEPARATOR}${name}`, folder: null };
   }
 
   private trackInfoFor(trackIds: number[]): PushTrack[] {

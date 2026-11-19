@@ -644,10 +644,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const service = body?.service ? parseService(body.service) : undefined;
     if (body?.service && !service) return reply.code(400).send({ error: 'service must be spotify or tidal.' });
     try {
-      return {
-        ...curate.organise(recipes, parsed.plan, service ?? undefined),
-        ...(service ? { foldersSupported: service === 'tidal' } : {}),
-      };
+      if (!service) return curate.organise(recipes, parsed.plan);
+      const foldersSupported = Boolean(makeConnector(service).findOrCreateFolder);
+      return { ...curate.organise(recipes, parsed.plan, { service, foldersSupported }), foldersSupported };
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
