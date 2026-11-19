@@ -97,6 +97,51 @@ Output: `mode` `"tracks"` (playlists — the usual choice) or `"albums"`; `sort`
 `playcount_desc`, `playcount_asc`, `recent`, `oldest_first_listen`, `random`; `limit` (default 50);
 optional `perArtistCap` (2–3 keeps playlists varied).
 
+## Organising into many playlists
+
+When the user wants their music split into **several** playlists — per month, per year, per genre, in
+folders (*"organise my loves of the last couple of years into per-month, per-genre playlists in a folder
+per year"*) — use an **organisation plan** instead of one recipe. With MCP use `preview_organisation` /
+`create_organisation`; otherwise:
+
+1. **Preview:** `curl -s -X POST $BASE/api/organise/preview -H 'Content-Type: application/json' -d '{"plan": <plan>, "service": "<svc>"}'`
+   → `{trackCount, playlistCount, likeDateFallback, folders: [{name, playlists: [{name, count, sample, existing}]}]}`.
+   Tell the user the totals and 2–3 example playlists ("58 playlists in 3 folders, e.g. 2025 / 2025-02 Electronic
+   (8 tracks) — create them?"). If many playlists have only a few tracks, suggest a larger `minGroupSize` or
+   coarser grouping (`likedYear`, or genre only) and preview again.
+2. **Create** after confirmation: `curl -s -X POST $BASE/api/organise/push/sync -H 'Content-Type: application/json' -d '{"plan": <plan>, "service": "<svc>"}'`
+   → `{results: [{folder, name, playlistUrl, matchedCount, unmatched, folderError?}]}`, or `{pending: true}` for big plans
+   (it carries on in the background; `GET $BASE/api/curate/result` has the results later). Reply with the playlist
+   and match counts, not every link.
+
+Plan grammar — the worked example for the request above:
+
+```json
+{"base": {"filters": [{"type": "likedInDays", "days": 730}],
+          "output": {"mode": "tracks", "sort": "oldest_first_listen", "limit": 50}},
+ "groupBy": ["likedMonth", "genreFamily"],
+ "folder": "{year}", "name": "{year}-{month} {genre}", "minGroupSize": 5}
+```
+
+| Field | Meaning |
+|---|---|
+| `base` | Any recipe (grammar above) selecting the tracks. Its `limit` is ignored: every match is organised. |
+| `groupBy` | One or two of: `likedMonth`, `likedYear` (when liked — latest like on any service; undated likes count as the first play), `firstListenMonth`, `firstListenYear`, and `genreFamily` (broad: metal, rock, pop…) or `canonicalGenre` (finer). At most one time and one genre dimension. |
+| `folder` | Folder name template, e.g. `"{year}"`. Omit for no folders. |
+| `name` | Playlist name template. Variables: `{year}`, `{month}` (01–12), `{monthName}`, `{genre}`. Folder + name must mention every grouped dimension. |
+| `minGroupSize` | Genre groups smaller than this (Unclassified too) merge into that period's "Other" playlist. Default 5. |
+| `excludePlaylistedOn` | `["tidal"]` etc.: skip tracks already in one of the user's playlists there. Don't use it when re-running a plan — the organised playlists themselves would count. |
+
+Notes:
+- **Folders exist on TIDAL only.** On Spotify the folder name is prefixed instead ("2025 · 2025-03 Metal");
+  say so when the user asked for folders on Spotify.
+- **Re-running a plan** (e.g. next month) replaces the playlists it created before, with the same name and folder,
+  by default. Pass `"onExisting": "skip"` to leave those alone, or `"append"` to only add new tracks. If the preview
+  shows `existing: true` playlists and the user didn't say, ask which they want.
+- `likeDateFallback` counts tracks whose likes have no date (e.g. bulk-imported Last.fm loves), placed by first play
+  instead. Mention it if it's a large share.
+- Genres are per artist; artists without genre tags land in "Unclassified".
+
 ## Voice etiquette
 
 Replies are often read aloud (Android Auto / watch): keep them to one or two short sentences,

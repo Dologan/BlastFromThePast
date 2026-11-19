@@ -7,13 +7,18 @@ import {
   type CuratePushOutcome,
   type ExistingPlaylist,
   type GroupBy,
+  type GroupDim,
   type LikedSource,
   type OnExisting,
+  type OrganisePlan,
+  type OrganisePlaylist,
+  type OrganisePreviewResult,
   type OverrideAction,
   type PlaylistInventory,
   type ServiceName,
   type Settings,
   type SyncStatus,
+  type TimeDim,
   type UnlikeExecuteResult,
   type UnlikePreviewRow,
 } from './api';
@@ -508,6 +513,301 @@ function ClassifyAndPush({ settings, auth }: { settings: Settings; auth: AuthSta
   );
 }
 
+// ---- Organise into many playlists (and folders) ----
+
+const TIME_OPTIONS: { value: TimeDim | ''; label: string }[] = [
+  { value: 'likedMonth', label: 'Month liked' },
+  { value: 'likedYear', label: 'Year liked' },
+  { value: 'firstListenMonth', label: 'Month first played' },
+  { value: 'firstListenYear', label: 'Year first played' },
+  { value: '', label: 'No time grouping' },
+];
+
+/** The templates a grouping starts with, e.g. folder '{year}', name '{year}-{month} {genre}'. */
+function defaultTemplates(time: TimeDim | '', genre: GroupBy | ''): { folder: string; name: string } {
+  const parts = [time === '' ? null : time.endsWith('Month') ? '{year}-{month}' : '{year}', genre ? '{genre}' : null];
+  return { folder: time ? '{year}' : '', name: parts.filter(Boolean).join(' ') };
+}
+
+const playlistId = (p: OrganisePlaylist) => `${p.folder ?? ''}/${p.name}`;
+
+function Organise({ settings, auth }: { settings: Settings; auth: AuthStatus | null }) {
+  const [likedDays, setLikedDays] = useState(730);
+  const [time, setTime] = useState<TimeDim | ''>('likedMonth');
+  const [genre, setGenre] = useState<GroupBy | ''>('genreFamily');
+  const [templates, setTemplates] = useState(() => defaultTemplates('likedMonth', 'genreFamily'));
+  const [minGroupSize, setMinGroupSize] = useState(5);
+  const [service, setService] = useState<ServiceName | ''>(settings.defaultService ?? '');
+  const [onExisting, setOnExisting] = useState<OnExisting>('replace');
+  const [preview, setPreview] = useState<OrganisePreviewResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [deselected, setDeselected] = useState<Set<string>>(new Set());
+  const [confirmingReplace, setConfirmingReplace] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [pushMsg, setPushMsg] = useState<string | null>(null);
+  const [pushResults, setPushResults] = useState<CuratePushOutcome[] | null>(null);
+  const [jobStatus, setJobStatus] = useState<SyncStatus | null>(null);
+
+  const connected: ServiceName[] = [
+    ...(auth?.spotify.connected ? (['spotify'] as const) : []),
+    ...(auth?.tidal.connected ? (['tidal'] as const) : []),
+  ];
+
+  const setGrouping = (nextTime: TimeDim | '', nextGenre: GroupBy | '') => {
+    setTime(nextTime);
+    setGenre(nextGenre);
+    setTemplates(defaultTemplates(nextTime, nextGenre));
+  };
+
+  const plan = useMemo<OrganisePlan>(
+    () => ({
+      base: {
+        filters: likedDays > 0 ? [{ type: 'likedInDays', days: likedDays }] : [{ type: 'loved' }],
+        output: { mode: 'tracks', sort: 'oldest_first_listen', limit: 10000 },
+      },
+      groupBy: [time, genre].filter((d): d is GroupDim => d !== ''),
+      folder: templates.folder || undefined,
+      name: templates.name,
+      minGroupSize,
+    }),
+    [likedDays, time, genre, templates, minGroupSize],
+  );
+
+  useEffect(() => {
+    if (plan.groupBy.length === 0) {
+      setPreview(null);
+      setError('Pick a time or genre grouping.');
+      return;
+    }
+    const t = setTimeout(() => {
+      api
+        .organisePreview(plan, service || undefined)
+        .then((r) => {
+          setPreview(r);
+          setDeselected(new Set());
+          setError(null);
+        })
+        .catch((err) => {
+          setPreview(null);
+          setError(err instanceof Error ? err.message : String(err));
+        });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [plan, service]);
+
+  const toggle = (id: string) =>
+    setDeselected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const selected = (preview?.folders ?? []).flatMap((f) => f.playlists).filter((p) => !deselected.has(playlistId(p)));
+  const selectedExisting = selected.filter((p) => p.existing).length;
+
+  const push = async () => {
+    if (!service || selected.length === 0) return;
+    if (onExisting === 'replace' && selectedExisting > 0 && !confirmingReplace) {
+      setConfirmingReplace(true);
+      return;
+    }
+    setConfirmingReplace(false);
+    setPushing(true);
+    setPushMsg(null);
+    setPushResults(null);
+    setJobStatus(null);
+    try {
+      await api.curatePush(
+        service,
+        onExisting,
+        selected.map((p) => ({ name: p.name, folder: p.folder, trackIds: p.trackIds })),
+      );
+      const { error: jobError } = await waitForJob(setJobStatus);
+      const { results } = await api.getCurateResult();
+      if (results) setPushResults(results);
+      else setPushMsg(jobError ? `Push failed: ${jobError}` : 'Push finished but returned no result.');
+    } catch (err) {
+      setPushMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPushing(false);
+      setJobStatus(null);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <h2>Organise into playlists</h2>
+      <p className="hint">
+        Split your loves into many playlists by when you liked them and their genre, filed in folders — e.g. one
+        playlist per month and genre, in a folder per year. Folders are created on TIDAL; Spotify has none, so the
+        folder name is put in front of the playlist name instead.
+      </p>
+      <label>
+        Liked in the last (0 = any time)
+        <DaysInput days={likedDays} onChange={setLikedDays} />
+      </label>
+      <div className="curator-criteria">
+        <label>
+          Group by time
+          <select value={time} onChange={(e) => setGrouping(e.target.value as TimeDim | '', genre)}>
+            {TIME_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Group by genre
+          <select value={genre} onChange={(e) => setGrouping(time, e.target.value as GroupBy | '')}>
+            <option value="genreFamily">Broad genre family</option>
+            <option value="canonicalGenre">Finer canonical genre</option>
+            <option value="">No genre grouping</option>
+          </select>
+        </label>
+        <label>
+          Min group size
+          <input
+            type="number"
+            min={1}
+            value={minGroupSize}
+            onChange={(e) => setMinGroupSize(Math.max(1, Number(e.target.value) || 1))}
+          />
+        </label>
+      </div>
+      <div className="curator-criteria">
+        <label>
+          Folder name
+          <input
+            value={templates.folder}
+            placeholder="no folders"
+            onChange={(e) => setTemplates({ ...templates, folder: e.target.value })}
+          />
+        </label>
+        <label>
+          Playlist name
+          <input value={templates.name} onChange={(e) => setTemplates({ ...templates, name: e.target.value })} />
+        </label>
+      </div>
+      <p className="hint">
+        Name variables: {'{year}'}, {'{month}'}, {'{monthName}'}, {'{genre}'}. Genre groups smaller than the minimum
+        merge into that period's "Other".
+      </p>
+
+      {error && <p className="error">{error}</p>}
+      {preview && (
+        <>
+          <p className="hint">
+            {preview.trackCount.toLocaleString()} tracks in {preview.playlistCount} playlist
+            {preview.playlistCount === 1 ? '' : 's'}
+            {preview.folders.some((f) => f.name) && ` across ${preview.folders.length} folders`}.
+            {preview.likeDateFallback > 0 &&
+              ` ${preview.likeDateFallback.toLocaleString()} have no like date (e.g. bulk-imported loves) and are placed by first play.`}
+            {preview.foldersSupported === false && templates.folder && ' On Spotify, folder names prefix the playlist names.'}
+          </p>
+          <div className="curate-groups">
+            {preview.folders.map((f) => (
+              <div className="curate-group" key={f.name ?? ''}>
+                <div className="curate-group-head">
+                  <strong>{f.name ?? 'No folder'}</strong>
+                  <span className="hint">
+                    {f.playlists.length} playlist{f.playlists.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <ul className="curate-track-list">
+                  {f.playlists.map((p) => (
+                    <li key={playlistId(p)} title={p.sample.join('\n')}>
+                      <label className="inline">
+                        <input type="checkbox" checked={!deselected.has(playlistId(p))} onChange={() => toggle(playlistId(p))} />
+                        {p.name} <span className="hint">({p.count})</span>
+                      </label>
+                      {p.existing && <span className="badge on">exists already</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {connected.length > 0 && (
+        <div className="push-row">
+          <label className="inline">
+            Push to
+            <select value={service} onChange={(e) => setService(e.target.value as ServiceName | '')}>
+              <option value="">choose…</option>
+              {connected.map((s) => (
+                <option key={s} value={s}>
+                  {SERVICE_LABEL[s]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="inline">
+            If a playlist exists
+            <select
+              value={onExisting}
+              onChange={(e) => {
+                setOnExisting(e.target.value as OnExisting);
+                setConfirmingReplace(false);
+              }}
+            >
+              <option value="replace">replace its contents</option>
+              <option value="append">add to it</option>
+              <option value="skip">skip it</option>
+            </select>
+          </label>
+          <button onClick={push} disabled={pushing || !service || selected.length === 0}>
+            {pushing ? 'Pushing…' : `Push ${selected.length} playlist${selected.length === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      )}
+      {connected.length === 0 && <p className="hint">Connect Spotify or TIDAL on the Dashboard to push playlists.</p>}
+      {confirmingReplace && (
+        <div className="conflict-box">
+          <p>
+            {selectedExisting} of the selected playlists already exist on {service && SERVICE_LABEL[service]} and will
+            have their contents replaced. This can't be undone. Continue?
+          </p>
+          <div className="conflict-actions">
+            <button onClick={push} disabled={pushing}>
+              Yes, replace
+            </button>
+            <button className="secondary" onClick={() => setConfirmingReplace(false)} disabled={pushing}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {pushing && <ProgressBar status={jobStatus} fallbackText="Pushing…" />}
+      {!pushing && pushMsg && <p className="hint">{pushMsg}</p>}
+      {pushResults && (
+        <ul className="curate-results">
+          {pushResults.map((outcome, i) => {
+            const label = outcome.folder ? `${outcome.folder} / ${outcome.name}` : outcome.name;
+            return 'skipped' in outcome && outcome.skipped ? (
+              <li key={i} className="hint">
+                {label} — skipped (already exists)
+              </li>
+            ) : (
+              <li key={i}>
+                <a href={outcome.playlistUrl} target="_blank" rel="noreferrer">
+                  {label}
+                </a>{' '}
+                — {outcome.matchedCount} track{outcome.matchedCount === 1 ? '' : 's'}
+                {outcome.unmatched.length > 0 && `, ${outcome.unmatched.length} unmatched`}
+                {outcome.folderError && <span className="error"> — couldn't file in folder: {outcome.folderError}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // ---- Cleanup (bulk unlike) ----
 
 function Cleanup() {
@@ -733,6 +1033,7 @@ export default function Curator() {
   return (
     <div className="curator">
       <ClassifyAndPush settings={settings} auth={auth} />
+      <Organise settings={settings} auth={auth} />
       <Cleanup />
     </div>
   );

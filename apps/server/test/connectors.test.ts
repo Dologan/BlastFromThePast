@@ -459,3 +459,60 @@ describe('TIDAL request retry-with-backoff on 429/503', () => {
     expect(calls.length).toBe(1);
   });
 });
+
+describe('TIDAL playlist folders', () => {
+  const foldersPage = {
+    data: [
+      { id: 'p1', type: 'playlists' },
+      { id: 'f2024', type: 'userCollectionFolders' },
+    ],
+    included: [{ id: 'f2024', type: 'userCollectionFolders', attributes: { name: '2024' } }],
+  };
+
+  it('reuses an existing folder found by name in the FOLDERS view', async () => {
+    const { fetchImpl, calls } = recorder(() => foldersPage);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    expect(await c.findOrCreateFolder('2024')).toBe('f2024');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toContain('/userCollectionPlaylists/me/relationships/items?collectionView=FOLDERS&include=items');
+  });
+
+  it('creates a folder in the playlist collection when none has the name', async () => {
+    const { fetchImpl, calls } = recorder((_url, method) =>
+      method === 'POST' ? { data: { id: 'fNEW', type: 'userCollectionFolders' } } : foldersPage,
+    );
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    expect(await c.findOrCreateFolder('2025')).toBe('fNEW');
+    const post = calls.find((call) => call.method === 'POST')!;
+    expect(post.url).toContain('/userCollectionFolders?');
+    expect(JSON.parse(post.body!)).toEqual({
+      data: {
+        type: 'userCollectionFolders',
+        attributes: { name: '2025' },
+        relationships: { userCollection: { data: { id: 'me', type: 'userCollectionPlaylists' } } },
+      },
+    });
+  });
+
+  it('files playlists into a folder in batches of 10', async () => {
+    const { fetchImpl, calls } = recorder(() => undefined);
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    await c.addPlaylistsToFolder('f1', Array.from({ length: 12 }, (_, i) => `p${i}`));
+    for (const call of calls) expect(call.url).toContain('/userCollectionFolders/f1/relationships/items');
+    expect(calls.map((call) => JSON.parse(call.body!).data.length)).toEqual([10, 2]);
+    expect(JSON.parse(calls[0]!.body!).data[0]).toEqual({ id: 'p0', type: 'playlists' });
+  });
+
+  it('lists playlists from the FLAT view, so playlists inside folders are included and folders are not', async () => {
+    const { fetchImpl, calls } = recorder(() => ({
+      data: [
+        { id: 'p1', type: 'playlists' },
+        { id: 'f1', type: 'userCollectionFolders' },
+      ],
+      included: [{ id: 'p1', type: 'playlists', attributes: { name: 'Mine' } }],
+    }));
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    expect(await c.listPlaylists()).toEqual([{ serviceId: 'p1', name: 'Mine', isOwn: true }]);
+    expect(calls[0]!.url).toContain('collectionView=FLAT');
+  });
+});

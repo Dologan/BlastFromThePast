@@ -82,6 +82,11 @@ export interface ServiceConnector {
   getPlaylistItems?(
     playlistId: string,
   ): Promise<{ serviceTrackId: string; name?: string; artistName?: string; isrc?: string }[]>;
+  /** Id of the user's playlist folder with this name, creating it if there's none.
+   * Optional: only services with a folder API (TIDAL) implement it. */
+  findOrCreateFolder?(name: string): Promise<string>;
+  /** Files playlists into a folder. Implemented together with findOrCreateFolder. */
+  addPlaylistsToFolder?(folderId: string, playlistIds: string[]): Promise<void>;
   deepLinkTrack(serviceId: string): string;
   deepLinkAlbum(serviceAlbumId: string): string;
   deepLinkArtist(serviceArtistId: string): string;

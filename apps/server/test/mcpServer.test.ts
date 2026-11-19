@@ -94,8 +94,15 @@ describe('MCP server tools (against a live API instance)', () => {
     handle.close();
   });
 
-  it('exposes the four tools, all with input schemas', () => {
-    expect(TOOLS.map((t) => t.name)).toEqual(['get_context', 'preview_playlist', 'check_existing_playlist', 'create_playlist']);
+  it('exposes its tools, all with input schemas', () => {
+    expect(TOOLS.map((t) => t.name)).toEqual([
+      'get_context',
+      'preview_playlist',
+      'check_existing_playlist',
+      'create_playlist',
+      'preview_organisation',
+      'create_organisation',
+    ]);
     for (const t of TOOLS) expect(t.inputSchema.type).toBe('object');
   });
 

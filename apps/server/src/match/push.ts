@@ -41,6 +41,8 @@ export interface PushOptions {
   /** 'new' (default) always creates a fresh playlist; 'replace'/'append' target `existingPlaylistId`. */
   mode?: 'new' | 'replace' | 'append';
   existingPlaylistId?: string;
+  /** Folder the playlist is filed in, recorded in playlist_log (the caller does the filing). */
+  folder?: string | null;
 }
 
 const LOW_CONFIDENCE = 0.6;
@@ -50,15 +52,21 @@ export interface ExistingPlaylistLog {
   createdAt: number;
 }
 
-/** Most recent push of `name` to `service` logged by this app, if any -- lets a
- * caller ask "replace, append, or create new anyway?" instead of duplicating. */
-export function findExistingPlaylist(handle: DbHandle, service: ServiceName, name: string): ExistingPlaylistLog | null {
+/** Most recent push of `name` (in `folder`; null for none) to `service` logged by this
+ * app, if any -- lets a caller ask "replace, append, or create new anyway?" instead of
+ * duplicating. */
+export function findExistingPlaylist(
+  handle: DbHandle,
+  service: ServiceName,
+  name: string,
+  folder: string | null = null,
+): ExistingPlaylistLog | null {
   const row = handle.sqlite
     .prepare(
       `SELECT service_playlist_id AS playlistId, created_at AS createdAt FROM playlist_log
-       WHERE service = ? AND name = ? ORDER BY created_at DESC LIMIT 1`,
+       WHERE service = ? AND name = ? AND folder IS ? ORDER BY created_at DESC, id DESC LIMIT 1`,
     )
-    .get(service, name) as { playlistId: string; createdAt: number } | undefined;
+    .get(service, name, folder) as { playlistId: string; createdAt: number } | undefined;
   return row ?? null;
 }
 
@@ -164,8 +172,8 @@ export async function pushPlaylist(
   if (!itemsError && matchedTrackIds.length > 0) {
     const logId = Number(
       handle.sqlite
-        .prepare('INSERT INTO playlist_log (service, service_playlist_id, name, created_at) VALUES (?, ?, ?, ?)')
-        .run(service, playlistId, name, Math.floor(Date.now() / 1000)).lastInsertRowid,
+        .prepare('INSERT INTO playlist_log (service, service_playlist_id, name, created_at, folder) VALUES (?, ?, ?, ?, ?)')
+        .run(service, playlistId, name, Math.floor(Date.now() / 1000), opts.folder ?? null).lastInsertRowid,
     );
     const logTrack = handle.sqlite.prepare(
       'INSERT OR IGNORE INTO playlist_log_tracks (playlist_log_id, track_id) VALUES (?, ?)',

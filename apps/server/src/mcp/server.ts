@@ -16,7 +16,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { pathToFileURL } from 'node:url';
-import { RECIPE_JSON_SCHEMA, type Recipe, type ServiceName } from '@bftp/core';
+import { ORGANISE_JSON_SCHEMA, RECIPE_JSON_SCHEMA, type OrganisePlan, type Recipe, type ServiceName } from '@bftp/core';
 
 export interface McpConfig {
   /** Base URL of the running BlastFromThePast server. */
@@ -109,6 +109,37 @@ export const TOOLS = [
       required: ['recipe', 'name'],
     },
   },
+  {
+    name: 'preview_organisation',
+    description:
+      'Dry-run organising tracks into MANY playlists (grouped by month/year liked or first played, and/or genre), ' +
+      'optionally in folders — e.g. "my loves of the last two years as per-month, per-genre playlists in a folder per year". ' +
+      'Returns the folder → playlist tree with track counts and samples, WITHOUT creating anything. Always preview before ' +
+      'create_organisation and confirm with the user ("31 playlists in 2 folders, e.g. 2025 / 2025-03 Metal (14 tracks) — create them?"). ' +
+      'If there are too many small playlists, raise minGroupSize or group more coarsely (likedYear, or genre only) and preview again.',
+    inputSchema: {
+      type: 'object',
+      properties: { plan: ORGANISE_JSON_SCHEMA, service: SERVICE_SCHEMA },
+      required: ['plan'],
+    },
+  },
+  {
+    name: 'create_organisation',
+    description:
+      'Create every playlist in an organisation plan (same plan as preview_organisation) on the streaming service, filing ' +
+      'them in folders on TIDAL (Spotify has no folders: the folder name is prefixed to the playlist name). Preview and get ' +
+      "confirmation first. onExisting: 'replace' (default) refreshes playlists this app already created with the same name " +
+      "and folder; 'skip' leaves them alone; 'append' adds only new tracks.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        plan: ORGANISE_JSON_SCHEMA,
+        service: SERVICE_SCHEMA,
+        onExisting: { enum: ['replace', 'skip', 'append'], description: "Default 'replace'." },
+      },
+      required: ['plan'],
+    },
+  },
 ] as const;
 
 export type ToolName = (typeof TOOLS)[number]['name'];
@@ -119,6 +150,21 @@ interface CreatePlaylistArgs {
   service?: ServiceName;
   mode?: 'new' | 'replace' | 'append';
   existingPlaylistId?: string;
+}
+
+interface OrganiseArgs {
+  plan: OrganisePlan;
+  service?: ServiceName;
+  onExisting?: 'replace' | 'skip' | 'append';
+}
+
+async function resolveService(cfg: McpConfig, service: ServiceName | undefined): Promise<ServiceName> {
+  if (service) return service;
+  const settings = await api(cfg, 'GET', '/api/settings');
+  if (!settings.defaultService) {
+    throw new Error('No service given and no default service configured. Ask the user whether to publish to spotify or tidal.');
+  }
+  return settings.defaultService;
 }
 
 export async function callTool(cfg: McpConfig, name: string, args: any): Promise<string> {
@@ -153,16 +199,8 @@ export async function callTool(cfg: McpConfig, name: string, args: any): Promise
     }
     case 'create_playlist': {
       const { recipe, name: playlistName, mode = 'new' } = args as CreatePlaylistArgs;
-      let { service, existingPlaylistId } = args as CreatePlaylistArgs;
-      if (!service) {
-        const settings = await api(cfg, 'GET', '/api/settings');
-        service = settings.defaultService ?? undefined;
-        if (!service) {
-          throw new Error(
-            'No service given and no default service configured. Ask the user whether to publish to spotify or tidal.',
-          );
-        }
-      }
+      let { existingPlaylistId } = args as CreatePlaylistArgs;
+      const service = await resolveService(cfg, (args as CreatePlaylistArgs).service);
       if (mode !== 'new' && !existingPlaylistId) {
         const existing = await api(
           cfg,
@@ -197,6 +235,52 @@ export async function callTool(cfg: McpConfig, name: string, args: any): Promise
         ...(r.skippedDuplicates ? { skippedDuplicates: r.skippedDuplicates } : {}),
         ...(r.itemsError ? { itemsError: r.itemsError } : {}),
         ...(r.matchError ? { matchError: r.matchError } : {}),
+      });
+    }
+    case 'preview_organisation': {
+      const { plan, service } = args as OrganiseArgs;
+      const data = await api(cfg, 'POST', '/api/organise/preview', { plan, service });
+      return JSON.stringify({
+        tracks: data.trackCount,
+        playlists: data.playlistCount,
+        excludedAlreadyPlaylisted: data.excluded,
+        ...(data.likeDateFallback ? { datedByFirstPlay: data.likeDateFallback } : {}),
+        ...(data.foldersSupported === false ? { note: `${service} has no folders: folder names will prefix playlist names.` } : {}),
+        folders: data.folders.map((f: any) => ({
+          folder: f.name,
+          playlists: f.playlists.map((p: any) => ({
+            name: p.name,
+            tracks: p.count,
+            sample: p.sample.slice(0, 3),
+            ...(p.existing ? { alreadyExists: true } : {}),
+          })),
+        })),
+      });
+    }
+    case 'create_organisation': {
+      const { plan, onExisting = 'replace' } = args as OrganiseArgs;
+      const service = await resolveService(cfg, (args as OrganiseArgs).service);
+      const data = await api(cfg, 'POST', '/api/organise/push/sync', { plan, service, onExisting });
+      if (data.pending) {
+        return JSON.stringify({
+          pending: true,
+          note: `Still creating ${data.playlistCount} playlists (${data.trackCount} tracks); they will appear on ${service} as they're done.`,
+        });
+      }
+      const results = (data.results ?? []) as any[];
+      const created = results.filter((r) => !r.skipped);
+      const folderErrors = created.filter((r) => r.folderError);
+      return JSON.stringify({
+        service,
+        playlistsCreated: created.length,
+        playlistsSkipped: results.length - created.length,
+        tracksMatched: created.reduce((n, r) => n + r.matchedCount, 0),
+        tracksUnmatched: created.reduce((n, r) => n + r.unmatched.length, 0),
+        playlists: created.map((r) => ({ folder: r.folder ?? null, name: r.name, url: r.playlistUrl, matched: r.matchedCount })),
+        ...(folderErrors.length ? { folderErrors: folderErrors.map((r) => `${r.folder} / ${r.name}: ${r.folderError}`) } : {}),
+        ...(created.some((r) => r.itemsError || r.matchError)
+          ? { errors: created.filter((r) => r.itemsError || r.matchError).map((r) => `${r.name}: ${r.itemsError ?? r.matchError}`) }
+          : {}),
       });
     }
     default:
