@@ -20,7 +20,7 @@ import { pushPlaylist, findExistingPlaylist, type PushResult } from './match/pus
 import { expandAlbumTracks } from './match/albumTracks.js';
 import { ServiceMatcher } from './match/matcher.js';
 import { CurateService } from './curate/curateService.js';
-import type { CuratePreviewOptions, CuratePushOutcome } from './curate/curateService.js';
+import type { CuratePreviewOptions, CuratePushOutcome, CuratePushPlaylistRequest } from './curate/curateService.js';
 import { UnlikeService } from './unlike/unlikeService.js';
 import type { UnlikeExecuteResult, UnlikePreviewOptions } from './unlike/unlikeService.js';
 import { resolveDeepLink, type LinkEntityKind } from './match/entityLinks.js';
@@ -30,6 +30,7 @@ import { getSetting, getStoredSetting, setSetting, SETTING_KEYS } from './settin
 import { computeGaps, computeNeglectedGems, computeOnThisDay, type InsightKind } from './stats/insights.js';
 import {
   PRESETS,
+  validateOrganisePlan,
   spotifySearchUrl,
   tidalSearchUrl,
   type Recipe,
@@ -538,16 +539,21 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   // waits for the job and returns the full result inline, so a tool call gets
   // the playlist URL and match stats in one round-trip.
   const syncPushTimeoutMs = opts.syncPushTimeoutMs ?? 90_000;
+  /** Waits up to syncPushTimeoutMs for the running job, for the agent-friendly /sync routes. */
+  const waitForJob = async () => {
+    const deadline = Date.now() + syncPushTimeoutMs;
+    while (jobs.getStatus().running && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return jobs.getStatus();
+  };
+
   app.post('/api/push/sync', async (req, reply) => {
     const prepared = preparePush(req.body as PushRequestBody);
     if ('error' in prepared) return reply.code(400).send({ error: prepared.error });
     if (!startPushJob(prepared)) return reply.code(409).send({ error: 'A job is already running.' });
 
-    const deadline = Date.now() + syncPushTimeoutMs;
-    while (jobs.getStatus().running && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    const status = jobs.getStatus();
+    const status = await waitForJob();
     if (status.running) {
       // Still going (big playlist, slow service): the job continues in the
       // background — the caller can poll GET /api/push/result.
@@ -595,8 +601,23 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   interface CuratePushRequestBody {
     service?: string;
     onExisting?: 'skip' | 'replace' | 'append';
-    playlists?: { name: string; trackIds: number[] }[];
+    playlists?: CuratePushPlaylistRequest[];
   }
+
+  const startCuratePush = (
+    service: ServiceName,
+    onExisting: 'skip' | 'replace' | 'append',
+    playlists: CuratePushPlaylistRequest[],
+  ): boolean => {
+    const connector = makeConnector(service);
+    lastCurate = null;
+    return jobs.start('curate-push', async () => {
+      lastCurate = await curate.push(connector, service, onExisting, playlists, jobs.reportProgress);
+    });
+  };
+
+  const parseOnExisting = (raw: unknown, fallback: 'skip' | 'replace' | 'append') =>
+    raw === 'skip' || raw === 'replace' || raw === 'append' ? raw : fallback;
 
   app.post('/api/curate/push', async (req, reply) => {
     const body = req.body as CuratePushRequestBody | undefined;
@@ -605,18 +626,78 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (!auth.isAuthorized(service)) return reply.code(400).send({ error: `Connect ${service} first.` });
     const playlists = (body?.playlists ?? []).filter((p) => p?.name?.trim() && p.trackIds?.length > 0);
     if (playlists.length === 0) return reply.code(400).send({ error: 'At least one non-empty playlist is required.' });
-    const onExisting = body?.onExisting ?? 'skip';
 
-    const connector = makeConnector(service);
-    lastCurate = null;
-    const started = jobs.start('curate-push', async () => {
-      lastCurate = await curate.push(connector, service, onExisting, playlists, jobs.reportProgress);
-    });
-    if (!started) return reply.code(409).send({ error: 'A job is already running.' });
+    if (!startCuratePush(service, parseOnExisting(body?.onExisting, 'skip'), playlists)) {
+      return reply.code(409).send({ error: 'A job is already running.' });
+    }
     return reply.code(202).send({ started: true, playlistCount: playlists.length });
   });
 
   app.get('/api/curate/result', async () => ({ results: lastCurate }));
+
+  // ---- Organiser: one recipe -> many playlists, grouped by time/genre, in folders ----
+
+  app.post('/api/organise/preview', async (req, reply) => {
+    const body = req.body as { plan?: unknown; service?: string } | undefined;
+    const parsed = validateOrganisePlan(body?.plan);
+    if ('error' in parsed) return reply.code(400).send({ error: parsed.error });
+    const service = body?.service ? parseService(body.service) : undefined;
+    if (body?.service && !service) return reply.code(400).send({ error: 'service must be spotify or tidal.' });
+    try {
+      if (!service) return curate.organise(recipes, parsed.plan);
+      const foldersSupported = Boolean(makeConnector(service).findOrCreateFolder);
+      return { ...curate.organise(recipes, parsed.plan, { service, foldersSupported }), foldersSupported };
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * Re-groups the plan server-side and pushes every playlist in it. An
+   * existing playlist (same name and folder, pushed by this app) is replaced
+   * by default, so re-running a plan refreshes it; pass onExisting 'skip' to
+   * leave existing ones alone or 'append' to add only new tracks.
+   */
+  type OrganisePushStart = { code: number; error: string } | { playlistCount: number; trackCount: number };
+  const startOrganisePush = (
+    body: { plan?: unknown; service?: string; onExisting?: string } | undefined,
+  ): OrganisePushStart => {
+    const parsed = validateOrganisePlan(body?.plan);
+    if ('error' in parsed) return { code: 400, error: parsed.error };
+    const service = body?.service ? parseService(body.service) : null;
+    if (!service) return { code: 400, error: 'A valid service is required.' };
+    if (!auth.isAuthorized(service)) return { code: 400, error: `Connect ${service} first.` };
+    let tree;
+    try {
+      tree = curate.organise(recipes, parsed.plan);
+    } catch (err) {
+      return { code: 400, error: err instanceof Error ? err.message : String(err) };
+    }
+    const playlists = tree.folders.flatMap((f) =>
+      f.playlists.map((p) => ({ name: p.name, folder: p.folder, trackIds: p.trackIds })),
+    );
+    if (playlists.length === 0) return { code: 400, error: 'The plan matched no tracks.' };
+    if (!startCuratePush(service, parseOnExisting(body?.onExisting, 'replace'), playlists)) {
+      return { code: 409, error: 'A job is already running.' };
+    }
+    return { playlistCount: playlists.length, trackCount: tree.trackCount };
+  };
+
+  app.post('/api/organise/push', async (req, reply) => {
+    const started = startOrganisePush(req.body as Parameters<typeof startOrganisePush>[0]);
+    if ('error' in started) return reply.code(started.code).send({ error: started.error });
+    return reply.code(202).send({ started: true, ...started });
+  });
+
+  app.post('/api/organise/push/sync', async (req, reply) => {
+    const started = startOrganisePush(req.body as Parameters<typeof startOrganisePush>[0]);
+    if ('error' in started) return reply.code(started.code).send({ error: started.error });
+    const status = await waitForJob();
+    // Still going: the job continues in the background; poll GET /api/curate/result.
+    if (status.running) return reply.code(202).send({ pending: true, ...started });
+    if (status.error) return reply.code(502).send({ error: status.error });
+    return { results: lastCurate, ...started };
+  });
 
   // ---- Unlike (bulk "unliking" of loved tracks already safely in a playlist) ----
 

@@ -151,6 +151,7 @@ export interface CuratePushProgress {
   playlistsDone: number;
   playlistsTotal: number;
   currentName: string;
+  currentFolder?: string | null;
   matched: number;
   processed: number;
   total: number;
@@ -311,11 +312,50 @@ export interface CuratePreviewRequest {
 export interface CuratePushPlaylistRequest {
   name: string;
   trackIds: number[];
+  /** Folder to file it in (TIDAL); prefixes the name on Spotify. */
+  folder?: string | null;
 }
 
 export type OnExisting = 'skip' | 'replace' | 'append';
 
-export type CuratePushOutcome = (PushResult & { skipped?: undefined }) | { skipped: true; name: string };
+export type CuratePushOutcome =
+  | (PushResult & { skipped?: undefined; name: string; folder?: string | null; folderError?: string })
+  | { skipped: true; name: string; folder?: string | null };
+
+// Mirror of OrganisePlan in @bftp/core (see recipeTypes.ts for why it's a copy).
+export type TimeDim = 'likedMonth' | 'likedYear' | 'firstListenMonth' | 'firstListenYear';
+export type GroupDim = TimeDim | GroupBy;
+
+export interface OrganisePlan {
+  base: Recipe;
+  groupBy: GroupDim[];
+  folder?: string;
+  name?: string;
+  minGroupSize?: number;
+  excludePlaylistedOn?: ServiceName[];
+}
+
+export interface OrganisePlaylist {
+  key: string;
+  name: string;
+  folder: string | null;
+  count: number;
+  trackIds: number[];
+  sample: string[];
+  /** The playlist's name on the previewed service (carries the folder where it has none). */
+  pushName?: string;
+  existing?: boolean;
+}
+
+export interface OrganisePreviewResult {
+  totalMatched: number;
+  excluded: number;
+  trackCount: number;
+  playlistCount: number;
+  likeDateFallback: number;
+  foldersSupported?: boolean;
+  folders: { name: string | null; playlists: OrganisePlaylist[] }[];
+}
 
 export type LikedSource = 'lastfm' | 'spotify' | 'tidal';
 
@@ -485,6 +525,12 @@ export const api = {
       body: JSON.stringify({ service, onExisting, playlists }),
     }),
   getCurateResult: () => request<{ results: CuratePushOutcome[] | null }>('/api/curate/result'),
+  organisePreview: (plan: OrganisePlan, service?: ServiceName) =>
+    request<OrganisePreviewResult>('/api/organise/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, service }),
+    }),
 
   // ---- Curator: cleanup (bulk unlike) ----
   unlikePreview: (opts: UnlikePreviewOptions) =>

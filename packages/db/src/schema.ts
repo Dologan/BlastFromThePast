@@ -260,6 +260,7 @@ export const playlistLog = sqliteTable('playlist_log', {
   servicePlaylistId: text('service_playlist_id').notNull(),
   name: text('name').notNull(),
   createdAt: integer('created_at').notNull(),
+  folder: text('folder'),
 });
 
 export const playlistLogTracks = sqliteTable(

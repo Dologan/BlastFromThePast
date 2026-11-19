@@ -459,3 +459,18 @@ describe('TIDAL request retry-with-backoff on 429/503', () => {
     expect(calls.length).toBe(1);
   });
 });
+
+describe('TIDAL playlist listing', () => {
+  it('lists playlists from the FLAT view, so playlists inside folders are included and folders are not', async () => {
+    const { fetchImpl, calls } = recorder(() => ({
+      data: [
+        { id: 'p1', type: 'playlists' },
+        { id: 'f1', type: 'userCollectionFolders' },
+      ],
+      included: [{ id: 'p1', type: 'playlists', attributes: { name: 'Mine' } }],
+    }));
+    const c = new TidalConnector(token, () => true, 'GB', fetchImpl);
+    expect(await c.listPlaylists()).toEqual([{ serviceId: 'p1', name: 'Mine', isOwn: true }]);
+    expect(calls[0]!.url).toContain('collectionView=FLAT');
+  });
+});

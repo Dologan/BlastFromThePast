@@ -164,6 +164,25 @@ pushing *is* the refinement step, so there's no separate "refine" stage.
 Review the counts, tick which groups to keep, then push — one playlist per
 group, with the usual skip/replace/append handling for name clashes.
 
+**Organise into playlists**: splits your loves into many playlists at once —
+by the month or year you liked them (or first played them), by genre, or
+both — optionally filed in folders, e.g. one playlist per month and genre in
+a year (`2025 / 2025-03 Metal`). Folder and playlist names are
+templates using `{year}`, `{month}`, `{monthName}` and `{genre}`; genre groups
+below the minimum size merge into that period's "Other". A like's date is the
+latest like on any service; likes with no date (such as bulk-imported Last.fm
+loves) count as the track's first play, and the preview says how many tracks
+were placed that way. Folders only shape names for now: neither Spotify nor
+TIDAL lets a third-party app create playlist folders (TIDAL's folder API is
+for its own apps), so a playlist whose name already contains its folder
+(`2025-03 Metal`) keeps it, and others get it prefixed (`2025 · March
+Metal`); you can file them into folders by hand in the app.
+Re-running the same grouping replaces the playlists it made before (matched
+by name and folder) by default, so it can be refreshed each month. The same
+plans are available to assistants via `POST /api/organise/preview` and
+`/api/organise/push/sync` (and the `preview_organisation` /
+`create_organisation` MCP tools).
+
 **Cleanup (bulk unlike)**: filters loved/liked tracks by whether they're
 already in a playlist, play count, and how long since they were last played,
 then lets you bulk-unlike the ones that were just a "revisit later" tag

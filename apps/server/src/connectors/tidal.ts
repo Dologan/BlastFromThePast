@@ -26,6 +26,11 @@ const JSON_API = 'application/vnd.api+json';
  * in TIDAL's current OpenAPI spec. `listPlaylists` uses the sibling
  * `userCollectionPlaylists` resource by analogy -- its exact response/`include`
  * shape was not directly confirmed, so treat it as needing a live check too.
+ *
+ * There's no folder support: TIDAL's playlist-folder endpoints
+ * (`userCollectionFolders`, `folders`, `folderItems`) require the INTERNAL
+ * access tier, i.e. TIDAL's own apps, and answer a third-party app with 403
+ * "Access tier is insufficient".
  */
 function includedTrack(id: string, included: any[]): { name?: string; artistName?: string; isrc?: string } {
   const artistsById = new Map<string, string>();
@@ -304,16 +309,17 @@ export class TidalConnector implements ServiceConnector {
   }
 
   /** The user's playlists via the `userCollectionPlaylists` resource (by analogy with
-   * `userCollectionTracks`; unlike that resource this shape wasn't directly confirmed). */
+   * `userCollectionTracks`; unlike that resource this shape wasn't directly confirmed).
+   * The FLAT view lists playlists inside folders too, rather than the folders. */
   async listPlaylists(): Promise<{ serviceId: string; name: string; isOwn: boolean }[]> {
     const out: { serviceId: string; name: string; isOwn: boolean }[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 100; page++) {
-      const path = `/userCollectionPlaylists/me/relationships/items?include=items${cursor ? `&page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
+      const path = `/userCollectionPlaylists/me/relationships/items?collectionView=FLAT&include=items${cursor ? `&page[cursor]=${encodeURIComponent(cursor)}` : ''}`;
       const data = await this.request('GET', path);
       const included: any[] = data?.included ?? [];
       for (const item of data?.data ?? []) {
-        if (!item?.id) continue;
+        if (!item?.id || (item.type && item.type !== 'playlists')) continue;
         const playlist = included.find((r) => r?.type === 'playlists' && r.id === item.id);
         // isOwn isn't reliably determinable from this shape without a confirmed
         // owner relationship -- defaults to true (everything in "my collection").
